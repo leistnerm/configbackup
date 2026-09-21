@@ -1,0 +1,44 @@
+# Security considerations
+
+ConfigBackup is intended to preserve operational configuration. That makes its output sensitive even when the tool does not intentionally collect passwords.
+
+## Credentials
+
+- Do not put database passwords, Git access tokens, or other secrets directly in YAML.
+- Git authentication should use normal Git mechanisms such as SSH keys/agents, Git Credential Manager, approved service identities, or deploy keys.
+- ConfigBackup rejects HTTP(S) Git remote URLs containing embedded user information/credentials.
+- The SQL collector uses the current PowerShell/dbatools identity by default and excludes password material from `Export-DbaInstance`.
+- Sensitive SSIS environment/parameter values are written as `<REDACTED>` where the SSISDB catalog marks them sensitive.
+- The PostgreSQL collector uses `pg_dumpall --no-role-passwords`, excludes subscriptions from native schema dumps when supported, and writes a separate redacted subscription inventory.
+- PostgreSQL settings and FDW/user-mapping inventory apply best-effort redaction to recognized credential-bearing fields. Raw PostgreSQL config-file copying is disabled unless explicitly requested.
+
+## Collected configuration can still contain secrets
+
+No generic collector can reliably determine whether arbitrary configuration text contains credentials. Examples include:
+
+- SQL Agent job commands or PowerShell/CmdExec arguments,
+- Windows service command lines and scheduled-task arguments,
+- application `.ini`/`.yaml`/`.json` files,
+- SSIS package/project content and connection metadata,
+- PostgreSQL function bodies, pg_cron commands, FDW/schema SQL, or custom settings that embed credentials as arbitrary text,
+- Linux repository/share configuration,
+- firewall, network, share, account, and infrastructure names.
+
+Treat filesystem archives and Git repositories as confidential operational data. Prefer private Git repositories, least-privilege access, encryption at rest, and protected backup locations.
+
+## Destructive-operation safeguards
+
+ConfigBackup includes several safeguards:
+
+- automatic retention defaults to indefinite unless configured otherwise,
+- `min_versions` is a retention floor,
+- deletion requires consecutive successful missing scans by default,
+- mass-deletion guards suspend deletion advancement on implausibly large changes,
+- required collector failures prevent dependent deletion processing,
+- collector cleanup is restricted to ConfigBackup staging unless explicitly overridden,
+- filesystem and Git destinations are protected from recursive source traversal,
+- Git repositories must be clean before a run,
+- Git snapshot changes are rolled back if a required task fails before commit,
+- `--dry-run` and `--prune --dry-run` are available for validation.
+
+Run new configurations with `--validate` and `--dry-run` before scheduling them unattended.

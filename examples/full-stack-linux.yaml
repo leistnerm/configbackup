@@ -1,0 +1,82 @@
+# Example Linux SQL Server/administration VM: guest inventory + SQL/Agent/SSIS.
+backup:
+  root: /srv/backups/configbackup
+  include_hostname: true
+
+git:
+  repository: /srv/configbackup-git
+  # remote_url: git@github.com:example/sql-config-history.git
+  branch: main
+  push: false
+  include_hostname: true
+
+variables:
+  CONFIGBACKUP_HOME: /opt/configbackup
+  SQL_SERVER: localhost
+  SYSTEM_STAGING: ${CONFIGBACKUP_STAGING}/system
+  SQL_STAGING: ${CONFIGBACKUP_STAGING}/sql-server
+
+retention_policies:
+  long-term:
+    active:
+      mode: tiered
+      min_versions: 5
+      tiers:
+        - interval: all
+          duration_days: 7
+        - interval: weekly
+          duration_days: 90
+        - interval: monthly
+          forever: true
+    deleted:
+      mode: tiered
+      min_versions: 5
+      grace_days: 90
+      tiers:
+        - interval: monthly
+          duration_days: 1825
+        - interval: yearly
+          forever: true
+
+tasks:
+  - name: collect-system
+    type: execute
+    phase: pre_backup
+    executable: python3
+    arguments:
+      - ${CONFIGBACKUP_HOME}/collectors/system/collect_system.py
+    output_directory: ${SYSTEM_STAGING}
+    clean_output: true
+    timeout: 900
+
+  - name: system-history
+    type: directory
+    source: ${SYSTEM_STAGING}
+    destination: system
+    depends_on: [collect-system]
+    storage: both
+    retention_policy: long-term
+
+  - name: collect-sql
+    type: execute
+    phase: pre_backup
+    executable: pwsh
+    arguments:
+      - -NoLogo
+      - -NoProfile
+      - -NonInteractive
+      - -File
+      - ${CONFIGBACKUP_HOME}/collectors/sqlserver/Collect-SqlServerConfiguration.ps1
+      - -SqlInstance
+      - ${SQL_SERVER}
+    output_directory: ${SQL_STAGING}
+    clean_output: true
+    timeout: 7200
+
+  - name: sql-history
+    type: directory
+    source: ${SQL_STAGING}
+    destination: sql
+    depends_on: [collect-sql]
+    storage: both
+    retention_policy: long-term

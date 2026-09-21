@@ -1,0 +1,58 @@
+backup:
+  root: 'C:\ConfigBackup'
+  include_hostname: true
+
+variables:
+  CONFIGBACKUP_HOME: 'C:\Admin\ConfigBackup'
+  SYSTEM_STAGING: '${CONFIGBACKUP_STAGING}/system'
+
+retention_policies:
+  standard:
+    active:
+      mode: tiered
+      min_versions: 3
+      tiers:
+        - interval: all
+          duration_days: 7
+        - interval: weekly
+          duration_days: 90
+        - interval: monthly
+          forever: true
+    deleted:
+      mode: tiered
+      min_versions: 3
+      grace_days: 30
+      tiers:
+        - interval: all
+          duration_days: 90
+        - interval: monthly
+          forever: true
+
+defaults:
+  retention_policy: standard
+
+tasks:
+  - name: collect-system
+    type: execute
+    phase: pre_backup
+    executable: py
+    arguments:
+      - -3
+      - '${CONFIGBACKUP_HOME}\collectors\system\collect_system.py'
+    output_directory: ${SYSTEM_STAGING}
+    clean_output: true
+    timeout: 900
+
+  - name: system-inventory
+    type: directory
+    source: ${SYSTEM_STAGING}
+    destination: system
+    depends_on: [collect-system]
+
+  - name: app-config
+    type: file
+    source: 'D:\Application\config.ini'
+
+  - name: programdata-configs
+    type: glob
+    source: 'C:\ProgramData\MyApp\**\*.config'

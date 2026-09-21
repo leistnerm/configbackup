@@ -1,0 +1,80 @@
+# Linux guest inventory + PostgreSQL configuration/schema history.
+backup:
+  root: /srv/backups/configbackup
+  include_hostname: true
+
+git:
+  repository: /srv/configbackup-git
+  # remote_url: git@github.com:example/server-config-history.git
+  branch: main
+  push: false
+  include_hostname: true
+
+variables:
+  CONFIGBACKUP_HOME: /opt/configbackup
+  SYSTEM_STAGING: ${CONFIGBACKUP_STAGING}/system
+  PG_STAGING: ${CONFIGBACKUP_STAGING}/postgresql
+
+retention_policies:
+  long-term:
+    active:
+      mode: tiered
+      min_versions: 5
+      tiers:
+        - interval: all
+          duration_days: 7
+        - interval: weekly
+          duration_days: 90
+        - interval: monthly
+          forever: true
+    deleted:
+      mode: tiered
+      min_versions: 5
+      grace_days: 90
+      tiers:
+        - interval: monthly
+          duration_days: 1825
+        - interval: yearly
+          forever: true
+
+tasks:
+  - name: collect-system
+    type: execute
+    phase: pre_backup
+    executable: python3
+    arguments:
+      - ${CONFIGBACKUP_HOME}/collectors/system/collect_system.py
+    output_directory: ${SYSTEM_STAGING}
+    clean_output: true
+    timeout: 900
+    required: true
+
+  - name: system-history
+    type: directory
+    source: ${SYSTEM_STAGING}
+    destination: system
+    depends_on: [collect-system]
+    storage: both
+    retention_policy: long-term
+
+  - name: collect-postgresql
+    type: execute
+    phase: pre_backup
+    executable: python3
+    arguments:
+      - ${CONFIGBACKUP_HOME}/collectors/postgresql/collect_postgresql.py
+      - --host
+      - localhost
+      # Use .pgpass/PGSERVICE/GSSAPI/certificates for authentication.
+    output_directory: ${PG_STAGING}
+    clean_output: true
+    timeout: 7200
+    required: true
+
+  - name: postgresql-history
+    type: directory
+    source: ${PG_STAGING}
+    destination: postgresql
+    depends_on: [collect-postgresql]
+    storage: both
+    retention_policy: long-term

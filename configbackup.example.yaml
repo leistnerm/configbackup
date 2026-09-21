@@ -1,0 +1,258 @@
+# ConfigBackup example configuration
+
+backup:
+  # Windows example: 'C:\ConfigBackup'
+  # Linux example: /var/backups/configbackup
+  root: /var/backups/configbackup
+  include_hostname: false
+  # hostname: SQL-PROD-01
+  deleted_directory: _deleted
+
+# Optional Git history backend. Required only by tasks using storage: git/both.
+# Authentication for a remote is handled by normal Git/SSH/credential-manager
+# configuration; do not put access tokens/passwords in this YAML.
+git:
+  # repository: /srv/configbackup-git
+  # remote_url: git@github.com:example/config-history.git
+  branch: main
+  remote_name: origin
+  push: false
+  auto_init: true
+  include_hostname: true
+  path_prefix: snapshots
+  author_name: ConfigBackup
+  author_email: configbackup@example.invalid
+  commit_message: 'ConfigBackup {hostname} {date} ({run_id})'
+
+internal:
+  directory: _configbackup
+  staging_directory: staging
+  # Optional fixed staging path; must be outside backup.root.
+  # staging_root: /var/tmp/configbackup-staging
+
+options:
+  hash_algorithm: sha256
+  stop_on_error: false
+  log_level: INFO
+
+logging:
+  max_bytes: 5000000
+  backup_count: 5
+
+deletion:
+  enabled: true
+  missing_runs: 2
+  max_percent_per_run: 20
+  min_items_for_percent: 10
+  max_items_per_run: 500
+
+variables:
+  SCRIPT_ROOT: /opt/configbackup
+  SQL_SERVER: SQL01
+  SQL_STAGING: ${CONFIGBACKUP_STAGING}/sql-server
+  SYSTEM_STAGING: ${CONFIGBACKUP_STAGING}/system
+  PG_STAGING: ${CONFIGBACKUP_STAGING}/postgresql
+
+retention_policies:
+  indefinite:
+    active:
+      mode: indefinite
+      min_versions: 3
+    deleted:
+      mode: indefinite
+      min_versions: 3
+      grace_days: 30
+
+  standard:
+    active:
+      mode: tiered
+      min_versions: 3
+      tiers:
+        - interval: all
+          duration_days: 7
+        - interval: weekly
+          duration_days: 90
+        - interval: monthly
+          forever: true
+    deleted:
+      mode: tiered
+      min_versions: 3
+      grace_days: 30
+      tiers:
+        - interval: all
+          duration_days: 90
+        - interval: monthly
+          duration_days: 1825
+        - interval: yearly
+          forever: true
+
+  important:
+    active:
+      mode: tiered
+      min_versions: 5
+      max_size: 50GB
+      tiers:
+        - interval: all
+          duration_days: 14
+        - interval: daily
+          duration_days: 90
+        - interval: weekly
+          duration_days: 365
+        - interval: monthly
+          forever: true
+    deleted:
+      mode: tiered
+      min_versions: 5
+      grace_days: 90
+      tiers:
+        - interval: all
+          duration_days: 90
+        - interval: monthly
+          duration_days: 1825
+        - interval: yearly
+          forever: true
+
+  system-inventory:
+    active:
+      mode: tiered
+      min_versions: 5
+      tiers:
+        - interval: all
+          duration_days: 14
+        - interval: weekly
+          duration_days: 180
+        - interval: monthly
+          forever: true
+    deleted:
+      mode: tiered
+      min_versions: 3
+      grace_days: 30
+      tiers:
+        - interval: monthly
+          duration_days: 1825
+        - interval: yearly
+          forever: true
+
+defaults:
+  retention_policy: standard
+  retention: {}
+  storage: filesystem
+
+tasks:
+  # Cross-platform Windows/Linux guest inventory collector.
+  - name: collect-system
+    type: execute
+    phase: pre_backup
+    executable: python3
+    arguments:
+      - ${SCRIPT_ROOT}/collectors/system/collect_system.py
+    output_directory: ${SYSTEM_STAGING}
+    clean_output: true
+    timeout: 900
+    stderr: log
+    required: true
+
+  - name: system-inventory
+    type: directory
+    source: ${SYSTEM_STAGING}
+    destination: system
+    depends_on: [collect-system]
+    retention_policy: system-inventory
+    # filesystem = dated history; git = current snapshot committed to Git;
+    # both = both mechanisms.
+    storage: filesystem
+
+  # Example SQL collector. Uncomment/adapt on SQL hosts.
+  # - name: collect-sql-server
+  #   type: execute
+  #   phase: pre_backup
+  #   executable: pwsh
+  #   arguments:
+  #     - -NoLogo
+  #     - -NoProfile
+  #     - -NonInteractive
+  #     - -File
+  #     - ${SCRIPT_ROOT}/collectors/sqlserver/Collect-SqlServerConfiguration.ps1
+  #     - -SqlInstance
+  #     - ${SQL_SERVER}
+  #     # For Git-focused SSIS history, -SkipIspac avoids binary repo growth
+  #     # while expanded .dtsx/project files are still collected.
+  #     # - -SkipIspac
+  #   output_directory: ${SQL_STAGING}
+  #   clean_output: true
+  #   timeout: 7200
+  #   required: true
+  #
+  # - name: sql-server
+  #   type: directory
+  #   source: ${SQL_STAGING}
+  #   destination: sql/${SQL_SERVER}
+  #   depends_on: [collect-sql-server]
+  #   retention_policy: important
+  #   storage: both
+
+  # Example PostgreSQL collector. Uses libpq authentication; do not put
+  # passwords in this YAML. Uncomment/adapt on PostgreSQL hosts.
+  # - name: collect-postgresql
+  #   type: execute
+  #   phase: pre_backup
+  #   executable: python3
+  #   arguments:
+  #     - ${SCRIPT_ROOT}/collectors/postgresql/collect_postgresql.py
+  #     - --host
+  #     - localhost
+  #     # - --user
+  #     # - configbackup
+  #     # - --database
+  #     # - appdb,reporting
+  #   output_directory: ${PG_STAGING}
+  #   clean_output: true
+  #   timeout: 7200
+  #   required: true
+  #
+  # - name: postgresql
+  #   type: directory
+  #   source: ${PG_STAGING}
+  #   destination: postgresql
+  #   depends_on: [collect-postgresql]
+  #   retention_policy: important
+  #   storage: both
+
+  - name: hosts-file
+    type: file
+    source: /etc/hosts
+
+  - name: nginx-config
+    type: directory
+    source: /etc/nginx
+    destination: etc/nginx
+    include:
+      - '**/*.conf'
+      - '*.conf'
+    exclude:
+      - '**/cache/**'
+
+  - name: nested-config-directories
+    type: glob
+    source: /opt/**/config/**/*.yaml
+
+  - name: example-command-output
+    type: command
+    executable: /usr/bin/env
+    arguments:
+      - python3
+      - -c
+      - 'print("example current-state report")'
+    output: reports/example.txt
+    stderr: log
+    timeout: 300
+    retention:
+      active:
+        mode: simple
+        min_versions: 5
+        max_versions: 30
+        max_age_days: 365
+      deleted:
+        mode: indefinite
+        min_versions: 3
+        grace_days: 30

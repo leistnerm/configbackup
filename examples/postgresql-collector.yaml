@@ -1,0 +1,80 @@
+# PostgreSQL configuration/schema collector example.
+# Requires PostgreSQL client programs: psql, pg_dump, pg_dumpall.
+# Authentication should use .pgpass/pgpass.conf, PGSERVICE, GSSAPI,
+# certificates, or another normal libpq mechanism -- not YAML passwords.
+
+backup:
+  root: /srv/backups/configbackup
+  include_hostname: true
+
+git:
+  repository: /srv/configbackup-git
+  # remote_url: git@github.com:example/postgresql-config-history.git
+  branch: main
+  push: false
+  include_hostname: true
+
+variables:
+  CONFIGBACKUP_HOME: /opt/configbackup
+  PG_STAGING: ${CONFIGBACKUP_STAGING}/postgresql
+
+retention_policies:
+  database-config:
+    active:
+      mode: tiered
+      min_versions: 5
+      tiers:
+        - interval: all
+          duration_days: 7
+        - interval: weekly
+          duration_days: 90
+        - interval: monthly
+          forever: true
+    deleted:
+      mode: tiered
+      min_versions: 5
+      grace_days: 90
+      tiers:
+        - interval: all
+          duration_days: 90
+        - interval: monthly
+          duration_days: 1825
+        - interval: yearly
+          forever: true
+
+tasks:
+  - name: collect-postgresql
+    type: execute
+    phase: pre_backup
+    executable: python3
+    arguments:
+      - ${CONFIGBACKUP_HOME}/collectors/postgresql/collect_postgresql.py
+      - --host
+      - localhost
+      - --port
+      - '5432'
+      # - --user
+      # - configbackup
+      # - --service
+      # - production
+      # - --database
+      # - appdb,reporting
+      # - --exclude-database
+      # - 'scratch*,test*'
+      # - --split-table-ddl     # optional; invokes pg_dump once per table
+      # - --include-sizes       # optional; creates frequently changing inventory
+      # - --skip-schedulers
+      # - --include-raw-config-files  # WARNING: raw files may contain secrets
+    output_directory: ${PG_STAGING}
+    clean_output: true
+    timeout: 7200
+    stderr: log
+    required: true
+
+  - name: archive-postgresql
+    type: directory
+    source: ${PG_STAGING}
+    destination: postgresql
+    depends_on: [collect-postgresql]
+    retention_policy: database-config
+    storage: both

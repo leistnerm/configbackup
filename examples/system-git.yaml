@@ -1,0 +1,38 @@
+# Guest-system inventory stored in Git/GitHub instead of dated files.
+backup:
+  # Still used for ConfigBackup operational state/logs.
+  root: /var/lib/configbackup
+  include_hostname: true
+
+git:
+  repository: /srv/config-history
+  # Optional remote. Use SSH/Git Credential Manager for authentication.
+  remote_url: git@github.com:example/config-history.git
+  remote_name: origin
+  branch: main
+  push: true
+  include_hostname: true
+  path_prefix: systems
+
+variables:
+  CONFIGBACKUP_HOME: /opt/configbackup
+  SYSTEM_STAGING: ${CONFIGBACKUP_STAGING}/system
+
+tasks:
+  - name: collect-system
+    type: execute
+    phase: pre_backup
+    executable: python3
+    arguments:
+      - ${CONFIGBACKUP_HOME}/collectors/system/collect_system.py
+    output_directory: ${SYSTEM_STAGING}
+    clean_output: true
+    timeout: 900
+    required: true
+
+  - name: system-git-snapshot
+    type: directory
+    source: ${SYSTEM_STAGING}
+    destination: current
+    depends_on: [collect-system]
+    storage: git

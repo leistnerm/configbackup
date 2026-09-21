@@ -1,0 +1,85 @@
+# SQL Server + SQL Agent + SSIS collector example for ConfigBackup.
+# Requires PowerShell, dbatools, and Microsoft SqlPackage.
+
+backup:
+  root: 'C:\ConfigBackup'
+  include_hostname: false
+
+# Optional Git/GitHub history backend. Uncomment repository and use
+# storage: git/both on the archive task.
+git:
+  # repository: 'C:\ConfigBackupGit'
+  # remote_url: 'git@github.com:example/sql-config-history.git'
+  branch: main
+  push: false
+  include_hostname: true
+
+variables:
+  PWSH: 'C:\Program Files\PowerShell\7\pwsh.exe'
+  SCRIPT_ROOT: 'C:\Admin\ConfigBackup'
+  SQL_SERVER: 'SQL01'
+  SQL_DESTINATION: 'SQL01'
+  SQL_STAGING: '${CONFIGBACKUP_STAGING}/sql-server'
+
+retention_policies:
+  sql-history:
+    active:
+      mode: tiered
+      min_versions: 5
+      tiers:
+        - interval: all
+          duration_days: 7
+        - interval: weekly
+          duration_days: 90
+        - interval: monthly
+          forever: true
+    deleted:
+      mode: tiered
+      min_versions: 5
+      grace_days: 90
+      tiers:
+        - interval: all
+          duration_days: 90
+        - interval: monthly
+          duration_days: 1825
+        - interval: yearly
+          forever: true
+
+tasks:
+  - name: collect-sql-server
+    type: execute
+    phase: pre_backup
+    executable: ${PWSH}
+    arguments:
+      - -NoLogo
+      - -NoProfile
+      - -NonInteractive
+      - -File
+      - '${SCRIPT_ROOT}\collectors\sqlserver\Collect-SqlServerConfiguration.ps1'
+      - -SqlInstance
+      - ${SQL_SERVER}
+      # Optional:
+      # - -Database
+      # - 'AppDb,ReportingDb'
+      # - -ExcludeDatabase
+      # - 'ScratchDb,Test*'
+      # - -IncludeSystemDatabases
+      # - -TrustServerCertificate
+      # - -SkipAgent
+      # - -SkipSsis
+      # - -SkipIspac       # useful for Git-focused histories
+      # - -IncludeLegacySsis
+    output_directory: ${SQL_STAGING}
+    clean_output: true
+    timeout: 7200
+    stderr: log
+    required: true
+
+  - name: archive-sql-server
+    type: directory
+    source: ${SQL_STAGING}
+    destination: 'sql/${SQL_DESTINATION}'
+    depends_on: [collect-sql-server]
+    retention_policy: sql-history
+    storage: filesystem
+    # Change to git or both after configuring git.repository.
