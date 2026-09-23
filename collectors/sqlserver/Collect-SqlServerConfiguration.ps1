@@ -14,7 +14,7 @@
     dbatools instance scripts by default.
 
 .NOTES
-    Collector version: 1.3.0
+    Collector version: 1.3.1
     Requires:
       - PowerShell 5.1+ (PowerShell 7+ recommended)
       - dbatools PowerShell module
@@ -60,7 +60,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$CollectorVersion = '1.3.0'
+$CollectorVersion = '1.3.1'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Write-CollectorMessage {
@@ -653,8 +653,8 @@ try {
     Write-CollectorMessage 'Connecting with dbatools'
     $server = Connect-DbaInstance @connectArgs
 
-    $requestedDatabases = Expand-NameList $Database
-    $excludedDatabases = Expand-NameList $ExcludeDatabase
+    $requestedDatabases = @(Expand-NameList $Database)
+    $excludedDatabases = @(Expand-NameList $ExcludeDatabase)
 
     $databaseArgs = @{
         SqlInstance     = $server
