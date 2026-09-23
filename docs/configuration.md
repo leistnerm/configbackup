@@ -31,24 +31,40 @@ backup:
 
 Required only when at least one artifact-producing task has `storage: git` or `storage: both`.
 
+For an existing/shared repository, the recommended configuration is pull-request mode:
+
 ```yaml
 git:
-  repository: /srv/config-history
+  repository: 'S:\Repos\Infrastructure'
+  mode: pull_request
   remote_name: origin
-  # remote_url: git@github.com:example/config-history.git
-  branch: main
-  push: false
-  auto_init: true
+  base_branch: auto
+  branch: 'configbackup/{hostname}'
+  push: true
   include_hostname: true
-  path_prefix: snapshots
+  path_prefix: configbackup
+  ignore:
+    - '**/*.ispac'
   author_name: ConfigBackup
   author_email: configbackup@example.invalid
   commit_message: 'ConfigBackup {hostname} {date} ({run_id})'
+  pull_request:
+    enabled: true
+    provider: github
+    draft: false
+    title: 'ConfigBackup: {hostname}'
+    body: 'Automated configuration snapshot for {hostname}.'
+    reviewers: []
+    labels: []
 ```
 
-The Git working tree must be clean before each run. ConfigBackup can initialize an empty local repository, but it intentionally does not fetch, pull, merge, rebase, or force-push. Clone an existing non-empty remote repository normally before pointing ConfigBackup at it.
+`mode: pull_request` uses a temporary linked Git worktree and an automation branch, so the repository's normal checkout may contain unrelated staged or unstaged user work without ConfigBackup modifying or committing it. `base_branch: auto` follows the configured remote's default branch. Built-in PR creation currently uses the GitHub CLI (`gh`); set `pull_request.enabled: false` if another scheduled process will create the PR.
 
-Remote authentication is handled by Git/SSH/Git Credential Manager or another approved credential mechanism. Do not put access tokens/passwords in YAML; HTTP(S) remote URLs containing embedded user-info are rejected.
+`git.ignore` is a list of Git-only glob exclusions relative to the ConfigBackup snapshot root. ConfigBackup writes a managed block into a `.gitignore` under that root. Ignored files are still retained by the filesystem side of `storage: both`. This is particularly useful for `**/*.ispac`. Negation patterns are not supported.
+
+`mode: direct` remains available for dedicated ConfigBackup repositories; direct mode requires a clean Git working tree.
+
+Remote authentication is handled by Git/SSH/Git Credential Manager or another approved credential mechanism. PR automation is authenticated separately through `gh`. Do not put access tokens/passwords in YAML; HTTP(S) remote URLs containing embedded user-info are rejected.
 
 See `git-storage.md`.
 

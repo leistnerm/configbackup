@@ -13,7 +13,7 @@ It is designed to run once and exit, making it suitable for **Windows Task Sched
 - SHA-256 change detection by default; unchanged files are not duplicated.
 - Version names use `filename.YYYYMMDD.ext`; additional distinct versions on the same day use `filename.YYYYMMDD-HHMMSS.ext`.
 - Collector/preparation tasks can run before backups.
-- Optional SQL Server collector using Microsoft SqlPackage + dbatools, including SQL Agent and SSIS inventory/export.
+- Optional cross-platform SQL Server collector using Microsoft SqlPackage + dbatools, including SQL Agent, SSIS inventory/export, conditional Availability Groups, and local SQL Server on Linux host configuration (`mssql.conf`, packages, systemd metadata).
 - Optional PostgreSQL collector using native `psql`/`pg_dump`/`pg_dumpall`, including safe cluster globals, schema/configuration inventory, logical replication metadata, and pg_cron/pgAgent.
 - Optional cross-platform guest-system collector for hardware, CPU/memory, storage layout, networking, services, scheduled tasks/timers, installed software/packages, patches, roles/features, drivers, accounts/groups, firewall configuration, and related operating-system state.
 - Optional Git storage backend: keep only the current snapshot in the working tree and use Git commits for history/diffs; works with GitHub, GitLab, Azure DevOps, local/bare remotes, or other Git servers.
@@ -57,6 +57,8 @@ Optional collectors have their own external prerequisites:
 
 See the collector-specific documentation for authentication and privileges.
 
+For Git/GitHub setup, including Windows Git Credential Manager, SSH/deploy keys, Linux credential stores, and unattended scheduling, see `docs/git-storage.md`.
+
 ## Quick start
 
 > **Recommended first-run safety:** begin with indefinite retention, run `--validate`, then `--dry-run`. Before enabling or changing retention, inspect `--prune --dry-run` output.
@@ -88,10 +90,12 @@ python3 configbackup.py --config configbackup.yaml
 - `examples/linux.yaml` — basic Linux file/directory backup.
 - `examples/full-stack-windows.yaml` — Windows guest inventory plus SQL Server collection.
 - `examples/full-stack-linux.yaml` — Linux guest inventory with Git/filesystem examples.
-- `examples/sql-schema-collector.yaml` — SQL Server schema, Agent, and SSIS collection.
+- `examples/sql-schema-collector.yaml` — SQL Server schema, Agent, and SSIS collection on Windows.
+- `examples/sql-schema-collector-linux.yaml` — SQL Server on Linux schema/instance collection plus local `mssql.conf`, packages, and systemd metadata.
 - `examples/postgresql-collector.yaml` — PostgreSQL configuration/schema collection with Git/filesystem history.
 - `examples/full-stack-postgresql-linux.yaml` — Linux guest inventory plus PostgreSQL configuration/schema history.
 - `examples/system-git.yaml` — guest-system inventory stored as a current Git snapshot.
+- `examples/git-existing-repo-pr.yaml` — existing/shared repository using an isolated automation branch, linked worktree, GitHub PR, and Git-only `.ispac` exclusion.
 
 ## Typical archive layout
 
@@ -147,26 +151,35 @@ See `docs/commands-and-collectors.md`. For SQL Server, see `docs/sql-server-coll
 
 ## Git-backed history
 
-A task may use Git instead of (or in addition to) dated filesystem history:
+A task can use `storage: git` or `storage: both`. For an existing/shared repository, 1.4.0 adds `git.mode: pull_request`, which uses an isolated linked worktree and automation branch instead of touching the normal checkout:
 
 ```yaml
 git:
-  repository: /srv/configbackup-repo
-  branch: main
+  repository: 'S:\Repos\Infrastructure'
+  mode: pull_request
+  base_branch: auto
+  branch: 'configbackup/{hostname}'
+  remote_name: origin
   push: true
-  remote_url: git@github.com:example/config-history.git
+  path_prefix: configbackup
+  include_hostname: true
+  ignore:
+    - '**/*.ispac'
+  pull_request:
+    enabled: true
+    provider: github
 
 tasks:
-  - name: system-inventory
+  - name: sql-history
     type: directory
-    source: ${SYSTEM_STAGING}
-    destination: systems
-    storage: git
+    source: ${SQL_STAGING}
+    destination: sql-server
+    storage: both
 ```
 
-With `storage: git`, the repository working tree contains the current snapshot and ConfigBackup creates a commit only when the snapshot actually changes. Confirmed source deletions become ordinary Git deletions, so the previous content remains available in Git history. With `storage: both`, the task is written to both Git and the normal dated-file archive.
+This keeps exact `.ispac` artifacts in the filesystem archive while excluding them from Git; expanded SSIS `.dtsx` and metadata remain diffable. Pull-request mode can auto-detect the remote default branch, push the ConfigBackup branch, and create/update a GitHub PR through the `gh` CLI. The main working tree can contain unrelated local changes because ConfigBackup operates in its own worktree.
 
-ConfigBackup never stores Git credentials in YAML. Configure authentication through normal Git mechanisms such as SSH keys/agents, Git Credential Manager, or a deploy key. A Git repository used by ConfigBackup must be clean at the start of a run; a dedicated repository is strongly recommended. See `docs/git-storage.md`.
+See `docs/git-storage.md` for Git/GitHub CLI authentication, Git Credential Manager, SSH/deploy keys, Task Scheduler/cron identity requirements, worktree/branch behavior, and PR setup.
 
 ## Retention
 
@@ -305,7 +318,3 @@ Retention runs automatically only when required tasks complete successfully, and
 - A source file that changes while being copied fails verification rather than committing a mismatched version. A later scheduled run can retry it.
 - Task renames leave the prior task's state/history untouched. This is intentionally conservative; old history is not silently reassigned or deleted.
 - The date used in filenames is the local date/time of the machine running ConfigBackup.
-
-## License
-
-Apache License 2.0. See [LICENSE](LICENSE).

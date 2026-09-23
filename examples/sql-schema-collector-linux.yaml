@@ -1,0 +1,63 @@
+# SQL Server on Linux collector example for ConfigBackup.
+# Run ConfigBackup on the SQL Server Linux guest to also capture mssql.conf,
+# SQL-related packages, and systemd configuration.
+
+backup:
+  root: /var/backups/configbackup
+  include_hostname: true
+
+variables:
+  CONFIGBACKUP_HOME: /opt/configbackup
+  SQL_SERVER: localhost
+  SQL_DESTINATION: sql-server
+  SQL_STAGING: ${CONFIGBACKUP_STAGING}/sql-server
+
+retention_policies:
+  sql-history:
+    active:
+      mode: tiered
+      min_versions: 5
+      tiers:
+        - interval: all
+          duration_days: 7
+        - interval: weekly
+          duration_days: 90
+        - interval: monthly
+          forever: true
+    deleted:
+      mode: tiered
+      min_versions: 5
+      grace_days: 90
+      tiers:
+        - interval: all
+          duration_days: 90
+        - interval: monthly
+          duration_days: 1825
+        - interval: yearly
+          forever: true
+
+tasks:
+  - name: collect-sql-server
+    type: execute
+    phase: pre_backup
+    executable: pwsh
+    arguments:
+      - -NoLogo
+      - -NoProfile
+      - -NonInteractive
+      - -File
+      - ${CONFIGBACKUP_HOME}/collectors/sqlserver/Collect-SqlServerConfiguration.ps1
+      - -SqlInstance
+      - ${SQL_SERVER}
+    output_directory: ${SQL_STAGING}
+    clean_output: true
+    timeout: 7200
+    stderr: log
+    required: true
+
+  - name: archive-sql-server
+    type: directory
+    source: ${SQL_STAGING}
+    destination: sql/${SQL_DESTINATION}
+    depends_on: [collect-sql-server]
+    retention_policy: sql-history
