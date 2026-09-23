@@ -14,7 +14,7 @@
     dbatools instance scripts by default.
 
 .NOTES
-    Collector version: 1.3.8
+    Collector version: 1.3.9
     Requires:
       - PowerShell 5.1+ (PowerShell 7+ recommended)
       - dbatools PowerShell module
@@ -73,7 +73,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$CollectorVersion = '1.3.8'
+$CollectorVersion = '1.3.9'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Write-CollectorMessage {
@@ -717,7 +717,11 @@ function Invoke-QueryTable {
         -EnableException
 
     if ($null -eq $ds -or $ds.Tables.Count -eq 0) { return $null }
-    return $ds.Tables[0]
+
+    # A DataTable is enumerable. Returning it normally through the PowerShell
+    # pipeline can unwrap it into DataRow objects, which breaks callers that
+    # expect .Rows/.Columns. Preserve the DataTable as a single object.
+    Write-Output -NoEnumerate $ds.Tables[0]
 }
 
 function Export-SqlAgentConfiguration {
