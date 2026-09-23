@@ -14,7 +14,7 @@
     dbatools instance scripts by default.
 
 .NOTES
-    Collector version: 1.3.5
+    Collector version: 1.3.6
     Requires:
       - PowerShell 5.1+ (PowerShell 7+ recommended)
       - dbatools PowerShell module
@@ -47,6 +47,16 @@ param(
     [switch]$IncludeLegacySsis,
     [switch]$AllowPartialSsis,
 
+    # When the collector itself is running on the same Linux host as SQL Server,
+    # capture mssql.conf, stable systemd unit metadata, package versions, and
+    # parsed SQL Server host settings. This is automatic unless skipped.
+    [switch]$SkipHostConfiguration,
+
+    # Use only when SQLInstance is an alias that prevents automatic local-host
+    # detection. This never collects a remote host; it explicitly says the local
+    # Linux machine running this collector is the SQL Server host.
+    [switch]$CollectLocalHostConfiguration,
+
     # Additional Export-DbaInstance categories to skip. "Databases", "AgentServer",
     # and "AvailabilityGroups" are always excluded from the broad export because this
     # collector handles those areas separately (AGs are conditionally exported only
@@ -63,7 +73,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$CollectorVersion = '1.3.5'
+$CollectorVersion = '1.3.6'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Write-CollectorMessage {
@@ -454,6 +464,216 @@ function Export-InstanceConfiguration {
 }
 
 
+function Test-IsLinuxRuntime {
+    try {
+        return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Linux)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Get-ComparableHostName {
+    param([AllowNull()][string]$Value)
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
+    $v = $Value.Trim().TrimEnd('.').ToLowerInvariant()
+    if ($v.Contains('\')) { $v = $v.Split('\')[0] }
+    if ($v.Contains(',')) { $v = $v.Split(',')[0] }
+    if ($v.StartsWith('[') -and $v.Contains(']')) { $v = $v.Trim([char[]]'[]') }
+    return $v
+}
+
+function Test-IsLocalSqlHost {
+    param(
+        [Parameter(Mandatory = $true)]$ServerObject,
+        [Parameter(Mandatory = $true)][string]$SqlInstanceInput
+    )
+
+    if ($CollectLocalHostConfiguration) { return $true }
+    if (-not (Test-IsLinuxRuntime)) { return $false }
+
+    $localNames = New-Object -TypeName 'System.Collections.Generic.HashSet[string]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($name in @('localhost', '127.0.0.1', '::1', [System.Net.Dns]::GetHostName())) {
+        $candidate = Get-ComparableHostName $name
+        if ($candidate) {
+            $null = $localNames.Add($candidate)
+            if ($candidate.Contains('.')) { $null = $localNames.Add($candidate.Split('.')[0]) }
+        }
+    }
+    try {
+        $fqdn = [System.Net.Dns]::GetHostEntry([System.Net.Dns]::GetHostName()).HostName
+        $candidate = Get-ComparableHostName $fqdn
+        if ($candidate) {
+            $null = $localNames.Add($candidate)
+            if ($candidate.Contains('.')) { $null = $localNames.Add($candidate.Split('.')[0]) }
+        }
+    }
+    catch { }
+
+    foreach ($value in @(
+        $SqlInstanceInput,
+        (Get-ObjectPropertyValue $ServerObject 'Name'),
+        (Get-ObjectPropertyValue $ServerObject 'NetName'),
+        (Get-ObjectPropertyValue $ServerObject 'ComputerNamePhysicalNetBIOS'),
+        (Get-ObjectPropertyValue $ServerObject 'DomainInstanceName')
+    )) {
+        $candidate = Get-ComparableHostName ([string]$value)
+        if (-not $candidate) { continue }
+        if ($localNames.Contains($candidate)) { return $true }
+        if ($candidate.Contains('.') -and $localNames.Contains($candidate.Split('.')[0])) { return $true }
+    }
+    return $false
+}
+
+function Convert-MssqlConfToRows {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $rows = @()
+    $section = ''
+    foreach ($raw in [System.IO.File]::ReadAllLines($Path)) {
+        $line = $raw.Trim()
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith('#') -or $line.StartsWith(';')) { continue }
+        if ($line -match '^\[(.+)\]$') {
+            $section = $Matches[1].Trim()
+            continue
+        }
+        $idx = $line.IndexOf('=')
+        if ($idx -lt 0) { continue }
+        $key = $line.Substring(0, $idx).Trim()
+        $value = $line.Substring($idx + 1).Trim()
+        $sensitive = ($key -match '(?i)(password|passwd|secret|token)')
+        if ($sensitive) { $value = '<REDACTED>' }
+        $rows += [pscustomobject][ordered]@{
+            Section = $section
+            Key = $key
+            Value = $value
+            SensitiveValueRedacted = $sensitive
+        }
+    }
+    return @($rows | Sort-Object Section, Key)
+}
+
+function Get-LinuxSqlPackageRows {
+    $rows = @()
+    $dpkg = Get-Command dpkg-query -ErrorAction SilentlyContinue
+    if ($null -ne $dpkg) {
+        try {
+            $lines = @(& $dpkg.Source -W '-f=${Package}\t${Version}\t${Architecture}\n' 2>$null)
+            foreach ($line in $lines) {
+                $parts = [string]$line -split "`t", 3
+                if ($parts.Count -lt 2) { continue }
+                if ($parts[0] -notmatch '^(mssql|msodbcsql)') { continue }
+                $rows += [pscustomobject][ordered]@{ Manager='dpkg'; Name=$parts[0]; Version=$parts[1]; Architecture=if ($parts.Count -gt 2) {$parts[2]} else {$null} }
+            }
+            return @($rows | Sort-Object Name, Version)
+        }
+        catch { }
+    }
+
+    $rpm = Get-Command rpm -ErrorAction SilentlyContinue
+    if ($null -ne $rpm) {
+        try {
+            $lines = @(& $rpm.Source -qa --qf "%{NAME}`t%{VERSION}-%{RELEASE}`t%{ARCH}`n" 2>$null)
+            foreach ($line in $lines) {
+                $parts = [string]$line -split "`t", 3
+                if ($parts.Count -lt 2) { continue }
+                if ($parts[0] -notmatch '^(mssql|msodbcsql)') { continue }
+                $rows += [pscustomobject][ordered]@{ Manager='rpm'; Name=$parts[0]; Version=$parts[1]; Architecture=if ($parts.Count -gt 2) {$parts[2]} else {$null} }
+            }
+        }
+        catch { }
+    }
+    return @($rows | Sort-Object Name, Version)
+}
+
+function Invoke-ExternalTextCommand {
+    param(
+        [Parameter(Mandatory = $true)][string]$Executable,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+    $cmd = Get-Command $Executable -ErrorAction SilentlyContinue
+    if ($null -eq $cmd) { return $null }
+    try {
+        $output = @(& $cmd.Source @Arguments 2>$null)
+        if ($LASTEXITCODE -ne 0) { return $null }
+        return (($output | ForEach-Object { [string]$_ }) -join "`n").TrimEnd() + "`n"
+    }
+    catch {
+        return $null
+    }
+}
+
+function Export-LinuxSqlHostConfiguration {
+    param([Parameter(Mandatory = $true)][string]$TargetDirectory)
+
+    Write-CollectorMessage 'Collecting local SQL Server on Linux host configuration'
+    [System.IO.Directory]::CreateDirectory($TargetDirectory) | Out-Null
+
+    $configPath = '/var/opt/mssql/mssql.conf'
+    if (Test-Path -LiteralPath $configPath) {
+        Copy-Item -LiteralPath $configPath -Destination (Join-Path $TargetDirectory 'mssql.conf') -Force
+        Write-StableCsv -Path (Join-Path $TargetDirectory 'mssql-settings.csv') -Rows (Convert-MssqlConfToRows -Path $configPath)
+    }
+    else {
+        Write-CollectorMessage 'Linux SQL host: /var/opt/mssql/mssql.conf not found'
+        Write-StableCsv -Path (Join-Path $TargetDirectory 'mssql-settings.csv') -Rows @()
+    }
+
+    Write-StableCsv -Path (Join-Path $TargetDirectory 'packages.csv') -Rows (Get-LinuxSqlPackageRows)
+
+    $systemdCat = Invoke-ExternalTextCommand -Executable 'systemctl' -Arguments @('cat', 'mssql-server.service')
+    if ($null -ne $systemdCat) {
+        Write-Utf8Text -Path (Join-Path $TargetDirectory 'mssql-server.service.txt') -Text $systemdCat
+    }
+
+    $showText = Invoke-ExternalTextCommand -Executable 'systemctl' -Arguments @(
+        'show', 'mssql-server.service',
+        '--property=LoadState,UnitFileState,FragmentPath,DropInPaths,User,Group,ExecStart,EnvironmentFiles'
+    )
+    $service = [ordered]@{}
+    if ($null -ne $showText) {
+        foreach ($line in ($showText -split "`n")) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            $idx = $line.IndexOf('=')
+            if ($idx -lt 0) { continue }
+            $service[$line.Substring(0,$idx)] = $line.Substring($idx+1)
+        }
+    }
+    Write-StableJson -Path (Join-Path $TargetDirectory 'service.json') -Value $service
+
+    $paths = [ordered]@{
+        MssqlRoot = '/var/opt/mssql'
+        ConfigFile = $configPath
+        DefaultDataDirectory = '/var/opt/mssql/data'
+        DefaultLogDirectory = '/var/opt/mssql/log'
+        DefaultBackupDirectory = '/var/opt/mssql/data'
+        MssqlConfExecutable = '/opt/mssql/bin/mssql-conf'
+    }
+    Write-StableJson -Path (Join-Path $TargetDirectory 'paths.json') -Value $paths
+}
+
+function Get-SsisFolderIdentifierColumn {
+    param([Parameter(Mandatory = $true)]$ServerObject)
+    Write-CollectorMessage 'SSISDB preflight: detecting catalog.folders identifier column'
+    $table = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'SSISDB' -Query @'
+SELECT c.name
+FROM sys.columns c
+JOIN sys.objects o ON c.object_id = o.object_id
+JOIN sys.schemas s ON o.schema_id = s.schema_id
+WHERE s.name = N'catalog'
+  AND o.name = N'folders'
+  AND c.name IN (N'folder_id', N'id')
+ORDER BY CASE c.name WHEN N'folder_id' THEN 0 ELSE 1 END;
+'@
+    if ($null -eq $table -or $table.Rows.Count -eq 0) {
+        throw 'Unable to determine the identifier column exposed by SSISDB catalog.folders (expected folder_id or id).'
+    }
+    $name = [string]$table.Rows[0]['name']
+    if ($name -notin @('folder_id','id')) { throw "Unexpected SSISDB catalog.folders identifier column '$name'." }
+    Write-CollectorMessage "SSISDB catalog.folders identifier column: $name"
+    return $name
+}
+
+
 function Get-SqlLiteral {
     param([AllowNull()][string]$Value)
     if ($null -eq $Value) { return 'NULL' }
@@ -630,11 +850,17 @@ function Export-SsisConfiguration {
         # snapshot can only be guaranteed for sysadmin or SSISDB ssis_admin. Do a
         # preflight before writing the tree so permission problems are explicit.
         Write-CollectorMessage 'SSISDB preflight: checking database status and access'
-        $accessTable = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'master' -Query @'
+        Write-CollectorMessage 'SSISDB preflight: querying master for status/HAS_DBACCESS'
+        try {
+            $accessTable = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'master' -Query @'
 SELECT
     CAST(DATABASEPROPERTYEX(N'SSISDB', N'Status') AS nvarchar(128)) AS database_status,
     HAS_DBACCESS(N'SSISDB') AS has_db_access;
 '@
+        }
+        catch {
+            throw "SSISDB preflight status/access query failed: $($_.Exception.Message)"
+        }
         if ($null -eq $accessTable -or $accessTable.Rows.Count -eq 0) {
             throw 'SSISDB preflight returned no database status row.'
         }
@@ -646,15 +872,22 @@ SELECT
         if ($databaseStatus -ne 'ONLINE') {
             throw "SSISDB exists but is not ONLINE (status: $databaseStatus)."
         }
+        Write-CollectorMessage "SSISDB preflight: status=$databaseStatus has_db_access=$hasDbAccess"
         if ($hasDbAccess -ne 1) {
             throw 'SSISDB exists but the current SQL principal does not have database access.'
         }
 
-        $roleTable = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'SSISDB' -Query @'
+        Write-CollectorMessage 'SSISDB preflight: checking sysadmin/ssis_admin membership'
+        try {
+            $roleTable = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'SSISDB' -Query @'
 SELECT
     IS_SRVROLEMEMBER(N'sysadmin') AS is_sysadmin,
     IS_ROLEMEMBER(N'ssis_admin') AS is_ssis_admin;
 '@
+        }
+        catch {
+            throw "SSISDB preflight role-membership query failed: $($_.Exception.Message)"
+        }
         $isSysadmin = 0
         $isSsisAdmin = 0
         if ($null -ne $roleTable -and $roleTable.Rows.Count -gt 0) {
@@ -666,6 +899,7 @@ SELECT
             }
         }
         $fullCatalogAccess = ($isSysadmin -eq 1 -or $isSsisAdmin -eq 1)
+        Write-CollectorMessage "SSISDB preflight: is_sysadmin=$isSysadmin is_ssis_admin=$isSsisAdmin full_catalog_visibility=$fullCatalogAccess"
         Write-StableJson -Path (Join-Path $TargetDirectory 'access.json') -Value ([ordered]@{
             DatabaseStatus = $databaseStatus
             HasDatabaseAccess = ($hasDbAccess -eq 1)
@@ -682,9 +916,12 @@ SELECT
             Write-CollectorMessage 'WARNING: SSIS partial mode is enabled; only objects visible to the current principal will be collected. Permission changes can look like deletions.'
         }
 
+        $folderIdColumn = Get-SsisFolderIdentifierColumn -ServerObject $ServerObject
+        $folderIdSql = '[' + $folderIdColumn + ']'
+
         $querySpecs = @(
             [pscustomobject]@{ Name='catalog-properties'; File='catalog-properties.csv'; RequiresFull=$true; Query='SELECT property_name, property_value FROM catalog.catalog_properties ORDER BY property_name;' },
-            [pscustomobject]@{ Name='folders'; File='folders.csv'; RequiresFull=$false; Query='SELECT id AS folder_id,name,description,created_by_name,created_time FROM catalog.folders ORDER BY name;' },
+            [pscustomobject]@{ Name='folders'; File='folders.csv'; RequiresFull=$false; Query="SELECT $folderIdSql AS folder_id,name,description,created_by_name,created_time FROM catalog.folders ORDER BY name;" },
             [pscustomobject]@{ Name='projects'; File='projects.csv'; RequiresFull=$false; Query='SELECT project_id,folder_id,name,description,project_format_version,deployed_by_name,last_deployed_time,created_time,object_version_lsn FROM catalog.projects ORDER BY folder_id,name;' },
             [pscustomobject]@{ Name='packages'; File='packages.csv'; RequiresFull=$false; Query='SELECT p.package_id,p.project_id,p.name,p.package_guid,p.description,p.package_format_version,p.version_major,p.version_minor,p.version_build,p.version_comments FROM catalog.packages p ORDER BY p.project_id,p.name;' },
             [pscustomobject]@{ Name='environment-references'; File='environment-references.csv'; RequiresFull=$false; Query='SELECT reference_id,project_id,reference_type,environment_folder_name,environment_name FROM catalog.environment_references ORDER BY project_id,reference_id;' },
@@ -717,11 +954,11 @@ SELECT
 
         Write-CollectorMessage 'SSIS projects: discovering visible deployed projects'
         try {
-            $projectTable = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'SSISDB' -Query @'
+            $projectTable = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'SSISDB' -Query @"
 SELECT p.project_id,p.name AS project_name,f.name AS folder_name
-FROM catalog.projects p JOIN catalog.folders f ON p.folder_id=f.id
+FROM catalog.projects p JOIN catalog.folders f ON p.folder_id=f.$folderIdSql
 ORDER BY f.name,p.name;
-'@
+"@
         }
         catch {
             throw "SSIS project discovery failed: $($_.Exception.Message)"
@@ -909,8 +1146,28 @@ try {
         IspacFiles             = (-not $SkipIspac)
         LegacySsis             = [bool]$IncludeLegacySsis
         SsisPartialMode         = [bool]$AllowPartialSsis
+        HostConfiguration       = (-not $SkipHostConfiguration)
+        ForceLocalHostConfig    = [bool]$CollectLocalHostConfiguration
     }
     Write-StableJson -Path (Join-Path $OutputDirectory 'collector.json') -Value $collectorInfo
+
+    if (-not $SkipHostConfiguration) {
+        $hostPlatform = [string](Get-ObjectPropertyValue $server 'HostPlatform')
+        if ($hostPlatform -match '^(?i:Linux)$') {
+            if (Test-IsLinuxRuntime) {
+                $isLocalSqlHost = Test-IsLocalSqlHost -ServerObject $server -SqlInstanceInput $SqlInstance
+                if ($isLocalSqlHost) {
+                    Export-LinuxSqlHostConfiguration -TargetDirectory (Join-Path $instanceDirectory 'host-linux')
+                }
+                else {
+                    Write-CollectorMessage 'SQL Server reports Linux, but it does not appear to be the local host; skipping host-level Linux files'
+                }
+            }
+            else {
+                Write-CollectorMessage 'SQL Server reports Linux, but the collector is not running on Linux; skipping host-level Linux files'
+            }
+        }
+    }
 
     $databaseMap = @()
     $usedDatabaseDirectories = @{}
