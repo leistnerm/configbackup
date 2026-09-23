@@ -14,7 +14,7 @@
     dbatools instance scripts by default.
 
 .NOTES
-    Collector version: 1.3.2
+    Collector version: 1.3.4
     Requires:
       - PowerShell 5.1+ (PowerShell 7+ recommended)
       - dbatools PowerShell module
@@ -46,9 +46,10 @@ param(
     [switch]$SkipIspac,
     [switch]$IncludeLegacySsis,
 
-    # Additional Export-DbaInstance categories to skip. "Databases" and "AgentServer"
-    # are always excluded because this collector inventories/extracts databases and
-    # SQL Agent separately.
+    # Additional Export-DbaInstance categories to skip. "Databases", "AgentServer",
+    # and "AvailabilityGroups" are always excluded from the broad export because this
+    # collector handles those areas separately (AGs are conditionally exported only
+    # when HADR is enabled).
     [string[]]$InstanceExclude = @(),
 
     [switch]$TrustServerCertificate,
@@ -61,7 +62,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$CollectorVersion = '1.3.2'
+$CollectorVersion = '1.3.4'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Write-CollectorMessage {
@@ -312,11 +313,67 @@ function Invoke-SqlPackageExtract {
     }
 }
 
+function Get-HadrEnabled {
+    param(
+        [Parameter(Mandatory = $true)]$ServerObject
+    )
+
+    try {
+        $dataSet = $ServerObject.ConnectionContext.ExecuteWithResults("SELECT CAST(SERVERPROPERTY('IsHadrEnabled') AS int) AS IsHadrEnabled;")
+        if ($null -eq $dataSet -or $dataSet.Tables.Count -eq 0 -or $dataSet.Tables[0].Rows.Count -eq 0) {
+            return $false
+        }
+        $value = $dataSet.Tables[0].Rows[0]['IsHadrEnabled']
+        if ($value -eq [DBNull]::Value -or $null -eq $value) {
+            return $false
+        }
+        return ([int]$value -eq 1)
+    }
+    catch {
+        Write-CollectorMessage ("Unable to determine HADR status; treating Availability Groups as unavailable: {0}" -f $_.Exception.Message)
+        return $false
+    }
+}
+
+function Export-AvailabilityGroupConfiguration {
+    param(
+        [Parameter(Mandatory = $true)]$ServerObject,
+        [Parameter(Mandatory = $true)][string]$TargetDirectory,
+        [Parameter(Mandatory = $true)][bool]$HadrEnabled
+    )
+
+    if (-not $HadrEnabled) {
+        Write-CollectorMessage 'Skipping Availability Groups: HADR is not enabled on this instance'
+        return
+    }
+
+    [System.IO.Directory]::CreateDirectory($TargetDirectory) | Out-Null
+    $targetPath = Join-Path $TargetDirectory 'AvailabilityGroups.sql'
+    Write-CollectorMessage 'Exporting Availability Groups'
+
+    try {
+        $groups = @(Get-DbaAvailabilityGroup -SqlInstance $ServerObject -EnableException | Sort-Object Name)
+        if ($groups.Count -eq 0) {
+            Write-CollectorMessage 'HADR is enabled, but no Availability Groups are configured'
+            return
+        }
+
+        $scriptingOptions = New-DbaScriptingOption
+        $null = $groups | Export-DbaScript -FilePath $targetPath -NoPrefix -ScriptingOptionsObject $scriptingOptions -EnableException
+        Write-CollectorMessage ("Availability Group export created {0} definition(s)" -f $groups.Count)
+    }
+    catch {
+        Write-CollectorError ("Availability Group export failed: {0}" -f $_.Exception.Message)
+        throw
+    }
+}
+
 function Export-InstanceConfiguration {
     param(
         [Parameter(Mandatory = $true)]$ServerObject,
         [Parameter(Mandatory = $true)][string]$TargetDirectory,
-        [string[]]$AdditionalExcludes
+        [string[]]$AdditionalExcludes,
+        [Parameter(Mandatory = $true)][bool]$HadrEnabled
     )
 
     [System.IO.Directory]::CreateDirectory($TargetDirectory) | Out-Null
@@ -325,11 +382,13 @@ function Export-InstanceConfiguration {
 
     try {
         # Databases are handled by the inventory/SqlPackage path below. SQL Agent is
-        # exported separately by Export-SqlAgentConfiguration, which gives us a more
-        # granular and diff-friendly layout. Keeping both out of Export-DbaInstance
-        # also avoids duplicating those objects and reduces the surface area of this
-        # broad dbatools export.
-        $excludes = @('Databases', 'AgentServer') + @(Expand-NameList $AdditionalExcludes)
+        # exported separately by Export-SqlAgentConfiguration. Availability Groups are
+        # also excluded from the broad Export-DbaInstance pass because dbatools treats
+        # "HADR not configured" as an exception when -EnableException is used. We
+        # conditionally export AGs below only when SERVERPROPERTY('IsHadrEnabled') = 1.
+        $requestedExcludes = @(Expand-NameList $AdditionalExcludes)
+        $skipAvailabilityGroups = ($requestedExcludes -contains 'AvailabilityGroups')
+        $excludes = @('Databases', 'AgentServer', 'AvailabilityGroups') + $requestedExcludes
         $excludes = @($excludes | Select-Object -Unique)
 
         Write-CollectorMessage 'Exporting SQL Server instance configuration with dbatools'
@@ -378,6 +437,13 @@ function Export-InstanceConfiguration {
         }
 
         Write-CollectorMessage ("Instance export created {0} file(s)" -f $fileInfos.Count)
+
+        if (-not $skipAvailabilityGroups) {
+            Export-AvailabilityGroupConfiguration -ServerObject $ServerObject -TargetDirectory $TargetDirectory -HadrEnabled:$HadrEnabled
+        }
+        else {
+            Write-CollectorMessage 'Skipping Availability Groups because InstanceExclude contains AvailabilityGroups'
+        }
     }
     finally {
         if (Test-Path -LiteralPath $tempRoot) {
@@ -704,6 +770,9 @@ try {
 
     Write-CollectorMessage ("Selected {0} database(s)" -f $databases.Count)
 
+    $hadrEnabled = Get-HadrEnabled -ServerObject $server
+    Write-CollectorMessage ("HADR enabled: {0}" -f $hadrEnabled)
+
     $instanceDirectory = Join-Path $OutputDirectory 'instance'
     $databaseRoot = Join-Path $OutputDirectory 'databases'
     [System.IO.Directory]::CreateDirectory($instanceDirectory) | Out-Null
@@ -722,6 +791,7 @@ try {
         Collation                 = Convert-ToStableString (Get-ObjectPropertyValue $server 'Collation')
         IsClustered               = Convert-ToStableString (Get-ObjectPropertyValue $server 'IsClustered')
         HostPlatform              = Convert-ToStableString (Get-ObjectPropertyValue $server 'HostPlatform')
+        IsHadrEnabled             = $hadrEnabled
     }
     Write-StableJson -Path (Join-Path $instanceDirectory 'server.json') -Value $serverInfo
 
@@ -775,6 +845,7 @@ try {
             ServerObject       = $server
             TargetDirectory    = (Join-Path $instanceDirectory 'scripts')
             AdditionalExcludes = $InstanceExclude
+            HadrEnabled        = $hadrEnabled
         }
         Export-InstanceConfiguration @instanceExportArgs
     }
