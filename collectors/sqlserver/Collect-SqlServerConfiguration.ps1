@@ -14,7 +14,7 @@
     dbatools instance scripts by default.
 
 .NOTES
-    Collector version: 1.3.6
+    Collector version: 1.3.7
     Requires:
       - PowerShell 5.1+ (PowerShell 7+ recommended)
       - dbatools PowerShell module
@@ -73,7 +73,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$CollectorVersion = '1.3.6'
+$CollectorVersion = '1.3.7'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Write-CollectorMessage {
@@ -847,62 +847,69 @@ function Export-SsisConfiguration {
         [System.IO.Directory]::CreateDirectory($TargetDirectory) | Out-Null
 
         # SSISDB catalog views enforce row-level security. A complete, deletion-safe
-        # snapshot can only be guaranteed for sysadmin or SSISDB ssis_admin. Do a
-        # preflight before writing the tree so permission problems are explicit.
+        # snapshot can only be guaranteed for sysadmin or SSISDB ssis_admin. Do the
+        # preflight in SSISDB itself. If USE [SSISDB] succeeds, database access is
+        # proven directly; this avoids an unnecessary master/HAS_DBACCESS dependency.
         Write-CollectorMessage 'SSISDB preflight: checking database status and access'
-        Write-CollectorMessage 'SSISDB preflight: querying master for status/HAS_DBACCESS'
-        try {
-            $accessTable = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'master' -Query @'
-SELECT
-    CAST(DATABASEPROPERTYEX(N'SSISDB', N'Status') AS nvarchar(128)) AS database_status,
-    HAS_DBACCESS(N'SSISDB') AS has_db_access;
-'@
-        }
-        catch {
-            throw "SSISDB preflight status/access query failed: $($_.Exception.Message)"
-        }
-        if ($null -eq $accessTable -or $accessTable.Rows.Count -eq 0) {
-            throw 'SSISDB preflight returned no database status row.'
-        }
-        $databaseStatus = [string]$accessTable.Rows[0]['database_status']
-        $hasDbAccess = 0
-        if ($accessTable.Rows[0]['has_db_access'] -isnot [System.DBNull]) {
-            $hasDbAccess = [int]$accessTable.Rows[0]['has_db_access']
-        }
-        if ($databaseStatus -ne 'ONLINE') {
-            throw "SSISDB exists but is not ONLINE (status: $databaseStatus)."
-        }
-        Write-CollectorMessage "SSISDB preflight: status=$databaseStatus has_db_access=$hasDbAccess"
-        if ($hasDbAccess -ne 1) {
-            throw 'SSISDB exists but the current SQL principal does not have database access.'
-        }
-
-        Write-CollectorMessage 'SSISDB preflight: checking sysadmin/ssis_admin membership'
+        $ssisDatabase = $ServerObject.Databases['SSISDB']
+        $databaseStatus = Convert-ToStableString (Get-ObjectPropertyValue $ssisDatabase 'Status')
+        Write-CollectorMessage "SSISDB preflight: SMO status=$databaseStatus"
+        Write-CollectorMessage 'SSISDB preflight: probing SSISDB and checking sysadmin/ssis_admin membership'
         try {
             $roleTable = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'SSISDB' -Query @'
 SELECT
+    DB_NAME() AS database_name,
     IS_SRVROLEMEMBER(N'sysadmin') AS is_sysadmin,
-    IS_ROLEMEMBER(N'ssis_admin') AS is_ssis_admin;
+    IS_ROLEMEMBER(N'ssis_admin') AS is_ssis_admin,
+    ORIGINAL_LOGIN() AS original_login,
+    SUSER_SNAME() AS login_name,
+    USER_NAME() AS database_user;
 '@
         }
         catch {
-            throw "SSISDB preflight role-membership query failed: $($_.Exception.Message)"
+            Write-CollectorError ("SSISDB preflight direct-access query failed: {0}" -f $_.Exception.Message)
+            if ($null -ne $_.CategoryInfo) {
+                Write-CollectorError ("Category: {0}" -f $_.CategoryInfo.ToString())
+            }
+            if (-not [string]::IsNullOrWhiteSpace($_.FullyQualifiedErrorId)) {
+                Write-CollectorError ("FullyQualifiedErrorId: {0}" -f $_.FullyQualifiedErrorId)
+            }
+            if ($null -ne $_.InvocationInfo -and -not [string]::IsNullOrWhiteSpace($_.InvocationInfo.PositionMessage)) {
+                Write-CollectorError $_.InvocationInfo.PositionMessage.Trim()
+            }
+            if (-not [string]::IsNullOrWhiteSpace($_.ScriptStackTrace)) {
+                Write-CollectorError $_.ScriptStackTrace
+            }
+            throw "SSISDB exists but the current SQL principal could not query it directly: $($_.Exception.Message)"
         }
+        if ($null -eq $roleTable -or $roleTable.Rows.Count -eq 0) {
+            throw 'SSISDB preflight direct-access query returned no row.'
+        }
+
+        $databaseName = [string]$roleTable.Rows[0]['database_name']
+        if ($databaseName -ne 'SSISDB') {
+            throw "SSISDB preflight unexpectedly executed in database '$databaseName'."
+        }
+
         $isSysadmin = 0
         $isSsisAdmin = 0
-        if ($null -ne $roleTable -and $roleTable.Rows.Count -gt 0) {
-            if ($roleTable.Rows[0]['is_sysadmin'] -isnot [System.DBNull] -and $null -ne $roleTable.Rows[0]['is_sysadmin']) {
-                $isSysadmin = [int]$roleTable.Rows[0]['is_sysadmin']
-            }
-            if ($roleTable.Rows[0]['is_ssis_admin'] -isnot [System.DBNull] -and $null -ne $roleTable.Rows[0]['is_ssis_admin']) {
-                $isSsisAdmin = [int]$roleTable.Rows[0]['is_ssis_admin']
-            }
+        if ($roleTable.Rows[0]['is_sysadmin'] -isnot [System.DBNull] -and $null -ne $roleTable.Rows[0]['is_sysadmin']) {
+            $isSysadmin = [int]$roleTable.Rows[0]['is_sysadmin']
+        }
+        if ($roleTable.Rows[0]['is_ssis_admin'] -isnot [System.DBNull] -and $null -ne $roleTable.Rows[0]['is_ssis_admin']) {
+            $isSsisAdmin = [int]$roleTable.Rows[0]['is_ssis_admin']
         }
         $fullCatalogAccess = ($isSysadmin -eq 1 -or $isSsisAdmin -eq 1)
-        Write-CollectorMessage "SSISDB preflight: is_sysadmin=$isSysadmin is_ssis_admin=$isSsisAdmin full_catalog_visibility=$fullCatalogAccess"
+        $originalLogin = [string]$roleTable.Rows[0]['original_login']
+        $loginName = [string]$roleTable.Rows[0]['login_name']
+        $databaseUser = [string]$roleTable.Rows[0]['database_user']
+        Write-CollectorMessage "SSISDB preflight: database=$databaseName login=$loginName database_user=$databaseUser is_sysadmin=$isSysadmin is_ssis_admin=$isSsisAdmin full_catalog_visibility=$fullCatalogAccess"
         Write-StableJson -Path (Join-Path $TargetDirectory 'access.json') -Value ([ordered]@{
             DatabaseStatus = $databaseStatus
-            HasDatabaseAccess = ($hasDbAccess -eq 1)
+            HasDatabaseAccess = $true
+            OriginalLogin = $originalLogin
+            LoginName = $loginName
+            DatabaseUser = $databaseUser
             IsSysadmin = ($isSysadmin -eq 1)
             IsSsisAdmin = ($isSsisAdmin -eq 1)
             FullCatalogVisibility = $fullCatalogAccess
