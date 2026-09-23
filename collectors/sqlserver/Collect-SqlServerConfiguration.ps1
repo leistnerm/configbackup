@@ -14,7 +14,7 @@
     dbatools instance scripts by default.
 
 .NOTES
-    Collector version: 1.3.1
+    Collector version: 1.3.15
     Requires:
       - PowerShell 5.1+ (PowerShell 7+ recommended)
       - dbatools PowerShell module
@@ -38,6 +38,11 @@ param(
 
     [string]$SqlPackagePath = 'sqlpackage',
 
+    # SqlPackage schema-model verification is intentionally opt-in. Extraction can
+    # succeed for source-control/history purposes even when model verification finds
+    # unresolved external references.
+    [switch]$VerifySchemaExtraction,
+
     [switch]$SkipSchema,
     [switch]$SkipInstanceExport,
     [switch]$SkipInventory,
@@ -45,12 +50,32 @@ param(
     [switch]$SkipSsis,
     [switch]$SkipIspac,
     [switch]$IncludeLegacySsis,
+    [switch]$AllowPartialSsis,
 
-    # Additional Export-DbaInstance categories to skip. "Databases" is always
-    # excluded because this collector inventories/extracts databases separately.
+    # When the collector itself is running on the same Linux host as SQL Server,
+    # capture mssql.conf, stable systemd unit metadata, package versions, and
+    # parsed SQL Server host settings. This is automatic unless skipped.
+    [switch]$SkipHostConfiguration,
+
+    # Use only when SQLInstance is an alias that prevents automatic local-host
+    # detection. This never collects a remote host; it explicitly says the local
+    # Linux machine running this collector is the SQL Server host.
+    [switch]$CollectLocalHostConfiguration,
+
+    # Additional Export-DbaInstance categories to skip. "Databases", "AgentServer",
+    # and "AvailabilityGroups" are always excluded from the broad export because this
+    # collector handles those areas separately (AGs are conditionally exported only
+    # when HADR is enabled).
     [string[]]$InstanceExclude = @(),
 
     [switch]$TrustServerCertificate,
+
+    # Optional non-secret SQL connection-string properties appended to dbatools and
+    # SqlPackage connections, for example:
+    #   'MultiSubnetFailover=True;ApplicationIntent=ReadOnly'
+    # Endpoint, authentication, database, timeout, encryption, certificate-trust, and
+    # credential-bearing keys are rejected because they are controlled explicitly.
+    [string]$AppendConnectionString = '',
 
     [ValidateRange(1, 600)]
     [int]$ConnectTimeout = 30
@@ -60,7 +85,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$CollectorVersion = '1.3.1'
+$CollectorVersion = '1.4.0'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Write-CollectorMessage {
@@ -98,8 +123,17 @@ function Write-StableJson {
 function Write-StableCsv {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [AllowEmptyCollection()][object[]]$Rows
+        [AllowNull()][AllowEmptyCollection()][object[]]$Rows
     )
+
+    # PowerShell functions emit no pipeline object for an empty array. Callers that
+    # convert a zero-row DataTable can therefore arrive here with $null rather than
+    # @(). Treat both forms as a valid empty result and write an empty CSV artifact.
+    if ($null -eq $Rows) {
+        Write-Utf8Text -Path $Path -Text ''
+        return
+    }
+
     $rowsArray = @($Rows)
     if ($rowsArray.Count -eq 0) {
         Write-Utf8Text -Path $Path -Text ''
@@ -276,6 +310,45 @@ function Convert-SpaceRows {
     return @($rows | Sort-Object Database, FileType, FileName)
 }
 
+function Assert-SafeAppendConnectionString {
+    param([AllowEmptyString()][string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return }
+
+    # Keep endpoint/authentication/secrets and settings already controlled by explicit
+    # collector parameters out of YAML. The option is intended for non-secret transport
+    # and routing properties such as MultiSubnetFailover or ApplicationIntent.
+    $forbiddenPattern = '(?i)(?:^|;)\s*(?:password|pwd|user\s*id|uid|access\s*token|authentication|integrated\s*security|trusted_connection|data\s*source|server|address|addr|network\s*address|initial\s*catalog|database|encrypt|trustservercertificate|connect\s*timeout|connection\s*timeout)\s*='
+    if ($Value -match $forbiddenPattern) {
+        throw 'AppendConnectionString contains a forbidden endpoint, authentication, credential, database, timeout, encryption, or certificate-trust property. Use the collector parameters for those settings and keep secrets out of YAML.'
+    }
+}
+
+function Get-SqlPackageSourceConnectionString {
+    param(
+        [Parameter(Mandatory = $true)][string]$ServerName,
+        [Parameter(Mandatory = $true)][string]$DatabaseName,
+        [int]$TimeoutSeconds,
+        [switch]$TrustCertificate,
+        [AllowEmptyString()][string]$AdditionalOptions
+    )
+
+    $builder = New-Object System.Data.SqlClient.SqlConnectionStringBuilder
+    $builder.DataSource = $ServerName
+    $builder.InitialCatalog = $DatabaseName
+    $builder.IntegratedSecurity = $true
+    $builder.Encrypt = $true
+    $builder.TrustServerCertificate = [bool]$TrustCertificate
+    $builder.ConnectTimeout = $TimeoutSeconds
+    $builder.ApplicationName = 'ConfigBackup.SqlCollector'
+
+    $connectionString = $builder.ConnectionString.TrimEnd(';')
+    if (-not [string]::IsNullOrWhiteSpace($AdditionalOptions)) {
+        $connectionString += ';' + $AdditionalOptions.Trim().Trim(';')
+    }
+    return $connectionString + ';'
+}
+
 function Invoke-SqlPackageExtract {
     param(
         [Parameter(Mandatory = $true)][string]$Executable,
@@ -283,31 +356,168 @@ function Invoke-SqlPackageExtract {
         [Parameter(Mandatory = $true)][string]$DatabaseName,
         [Parameter(Mandatory = $true)][string]$TargetDirectory,
         [int]$TimeoutSeconds,
-        [switch]$TrustCertificate
+        [switch]$TrustCertificate,
+        [switch]$VerifyExtraction,
+        [AllowEmptyString()][string]$AdditionalConnectionOptions
     )
 
-    [System.IO.Directory]::CreateDirectory($TargetDirectory) | Out-Null
-
-    $arguments = @(
-        '/Action:Extract',
-        "/SourceServerName:$ServerName",
-        "/SourceDatabaseName:$DatabaseName",
-        "/SourceTimeout:$TimeoutSeconds",
-        "/TargetFile:$TargetDirectory",
-        '/p:ExtractTarget=SchemaObjectType',
-        '/p:ExtractAllTableData=False',
-        '/p:VerifyExtraction=True',
-        '/Quiet:True'
-    )
-    if ($TrustCertificate) {
-        $arguments += '/SourceTrustServerCertificate:True'
+    # SqlPackage creates the SchemaObjectType target tree itself. Ensure only the
+    # parent exists and remove any stale target from a prior/partial extraction.
+    # ConfigBackup staging is intentionally disposable current-state output, so this
+    # cleanup is safe and prevents SqlPackage target-collision failures.
+    $targetParent = Split-Path -Parent $TargetDirectory
+    if (-not [string]::IsNullOrWhiteSpace($targetParent)) {
+        [System.IO.Directory]::CreateDirectory($targetParent) | Out-Null
+    }
+    if (Test-Path -LiteralPath $TargetDirectory) {
+        Remove-Item -LiteralPath $TargetDirectory -Recurse -Force
     }
 
-    Write-CollectorMessage "Extracting schema: $DatabaseName"
-    & $Executable @arguments
-    $exitCode = $LASTEXITCODE
-    if ($exitCode -ne 0) {
-        throw "SqlPackage failed for database '$DatabaseName' with exit code $exitCode."
+    $diagnosticsFile = Join-Path ([System.IO.Path]::GetTempPath()) ("configbackup-sqlpackage-" + [guid]::NewGuid().ToString('N') + '.log')
+    $verifyValue = if ($VerifyExtraction) { 'True' } else { 'False' }
+    $trustValue = if ($TrustCertificate) { 'True' } else { 'False' }
+
+    if ([string]::IsNullOrWhiteSpace($AdditionalConnectionOptions)) {
+        # Keep the default invocation identical to a normal SqlPackage CLI command. This
+        # path is intentionally simple because it is also easy to reproduce manually.
+        $arguments = @(
+            '/Action:Extract',
+            "/SourceServerName:$ServerName",
+            "/SourceDatabaseName:$DatabaseName",
+            "/SourceTimeout:$TimeoutSeconds",
+            '/SourceEncryptConnection:True',
+            "/SourceTrustServerCertificate:$trustValue",
+            "/TargetFile:$TargetDirectory",
+            '/p:ExtractTarget=SchemaObjectType',
+            '/p:ExtractAllTableData=False',
+            "/p:VerifyExtraction=$verifyValue",
+            '/Diagnostics:True',
+            "/DiagnosticsFile:$diagnosticsFile",
+            '/DiagnosticsLevel:Verbose'
+        )
+    }
+    else {
+        $sourceConnectionString = Get-SqlPackageSourceConnectionString `
+            -ServerName $ServerName `
+            -DatabaseName $DatabaseName `
+            -TimeoutSeconds $TimeoutSeconds `
+            -TrustCertificate:$TrustCertificate `
+            -AdditionalOptions $AdditionalConnectionOptions
+
+        $arguments = @(
+            '/Action:Extract',
+            "/SourceConnectionString:$sourceConnectionString",
+            "/TargetFile:$TargetDirectory",
+            '/p:ExtractTarget=SchemaObjectType',
+            '/p:ExtractAllTableData=False',
+            "/p:VerifyExtraction=$verifyValue",
+            '/Diagnostics:True',
+            "/DiagnosticsFile:$diagnosticsFile",
+            '/DiagnosticsLevel:Verbose'
+        )
+    }
+
+    Write-CollectorMessage "Extracting schema: $DatabaseName (verify=$verifyValue trust_server_certificate=$trustValue)"
+    try {
+        # Use PowerShell's native invocation operator so argument semantics match the
+        # standalone command administrators can reproduce at a console. Temporarily
+        # prevent a non-zero native exit from becoming a terminating PowerShell error;
+        # the collector handles the exit code and diagnostics explicitly below.
+        $savedErrorActionPreference = $ErrorActionPreference
+        $nativePreferenceExists = Test-Path variable:PSNativeCommandUseErrorActionPreference
+        if ($nativePreferenceExists) {
+            $savedNativePreference = $PSNativeCommandUseErrorActionPreference
+        }
+        try {
+            $ErrorActionPreference = 'Continue'
+            if ($nativePreferenceExists) {
+                $PSNativeCommandUseErrorActionPreference = $false
+            }
+            # Do not redirect/capture SqlPackage output here. Let stdout/stderr flow
+            # directly to ConfigBackup, which already captures and logs both streams.
+            # This also keeps invocation semantics identical to a manually tested CLI
+            # command and avoids PowerShell NativeCommandError wrapping.
+            & $Executable @arguments
+            $exitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $savedErrorActionPreference
+            if ($nativePreferenceExists) {
+                $PSNativeCommandUseErrorActionPreference = $savedNativePreference
+            }
+        }
+
+        if ($exitCode -ne 0) {
+            Write-CollectorError "SqlPackage failed for database '$DatabaseName' with exit code $exitCode."
+            if (Test-Path -LiteralPath $diagnosticsFile) {
+                $diagnosticLines = @(Get-Content -LiteralPath $diagnosticsFile -ErrorAction SilentlyContinue)
+                if ($diagnosticLines.Count -gt 0) {
+                    Write-CollectorError 'SqlPackage diagnostics:'
+                    foreach ($line in @($diagnosticLines | Select-Object -Last 300)) {
+                        Write-CollectorError ("SqlPackage diagnostic: " + [string]$line)
+                    }
+                }
+            }
+            throw "SqlPackage failed for database '$DatabaseName' with exit code $exitCode."
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $diagnosticsFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-HadrEnabled {
+    param(
+        [Parameter(Mandatory = $true)]$ServerObject
+    )
+
+    try {
+        $dataSet = $ServerObject.ConnectionContext.ExecuteWithResults("SELECT CAST(SERVERPROPERTY('IsHadrEnabled') AS int) AS IsHadrEnabled;")
+        if ($null -eq $dataSet -or $dataSet.Tables.Count -eq 0 -or $dataSet.Tables[0].Rows.Count -eq 0) {
+            return $false
+        }
+        $value = $dataSet.Tables[0].Rows[0]['IsHadrEnabled']
+        if ($value -eq [DBNull]::Value -or $null -eq $value) {
+            return $false
+        }
+        return ([int]$value -eq 1)
+    }
+    catch {
+        Write-CollectorMessage ("Unable to determine HADR status; treating Availability Groups as unavailable: {0}" -f $_.Exception.Message)
+        return $false
+    }
+}
+
+function Export-AvailabilityGroupConfiguration {
+    param(
+        [Parameter(Mandatory = $true)]$ServerObject,
+        [Parameter(Mandatory = $true)][string]$TargetDirectory,
+        [Parameter(Mandatory = $true)][bool]$HadrEnabled
+    )
+
+    if (-not $HadrEnabled) {
+        Write-CollectorMessage 'Skipping Availability Groups: HADR is not enabled on this instance'
+        return
+    }
+
+    [System.IO.Directory]::CreateDirectory($TargetDirectory) | Out-Null
+    $targetPath = Join-Path $TargetDirectory 'AvailabilityGroups.sql'
+    Write-CollectorMessage 'Exporting Availability Groups'
+
+    try {
+        $groups = @(Get-DbaAvailabilityGroup -SqlInstance $ServerObject -EnableException | Sort-Object Name)
+        if ($groups.Count -eq 0) {
+            Write-CollectorMessage 'HADR is enabled, but no Availability Groups are configured'
+            return
+        }
+
+        $scriptingOptions = New-DbaScriptingOption
+        $null = $groups | Export-DbaScript -FilePath $targetPath -NoPrefix -ScriptingOptionsObject $scriptingOptions -EnableException
+        Write-CollectorMessage ("Availability Group export created {0} definition(s)" -f $groups.Count)
+    }
+    catch {
+        Write-CollectorError ("Availability Group export failed: {0}" -f $_.Exception.Message)
+        throw
     }
 }
 
@@ -315,7 +525,8 @@ function Export-InstanceConfiguration {
     param(
         [Parameter(Mandatory = $true)]$ServerObject,
         [Parameter(Mandatory = $true)][string]$TargetDirectory,
-        [string[]]$AdditionalExcludes
+        [string[]]$AdditionalExcludes,
+        [Parameter(Mandatory = $true)][bool]$HadrEnabled
     )
 
     [System.IO.Directory]::CreateDirectory($TargetDirectory) | Out-Null
@@ -323,20 +534,48 @@ function Export-InstanceConfiguration {
     [System.IO.Directory]::CreateDirectory($tempRoot) | Out-Null
 
     try {
-        $excludes = @('Databases') + @(Expand-NameList $AdditionalExcludes)
+        # Databases are handled by the inventory/SqlPackage path below. SQL Agent is
+        # exported separately by Export-SqlAgentConfiguration. Availability Groups are
+        # also excluded from the broad Export-DbaInstance pass because dbatools treats
+        # "HADR not configured" as an exception when -EnableException is used. We
+        # conditionally export AGs below only when SERVERPROPERTY('IsHadrEnabled') = 1.
+        $requestedExcludes = @(Expand-NameList $AdditionalExcludes)
+        $skipAvailabilityGroups = ($requestedExcludes -contains 'AvailabilityGroups')
+        $excludes = @('Databases', 'AgentServer', 'AvailabilityGroups') + $requestedExcludes
         $excludes = @($excludes | Select-Object -Unique)
 
         Write-CollectorMessage 'Exporting SQL Server instance configuration with dbatools'
+        Write-CollectorMessage ("dbatools instance export excludes: {0}" -f ($excludes -join ', '))
         $exportArgs = @{
-            SqlInstance    = $ServerObject
-            Path           = $tempRoot
-            Force          = $true
-            NoPrefix       = $true
+            SqlInstance     = $ServerObject
+            Path            = $tempRoot
+            Force           = $true
+            NoPrefix        = $true
             ExcludePassword = $true
-            Exclude        = $excludes
+            Exclude         = $excludes
             EnableException = $true
+            Verbose         = $true
         }
-        $files = @(Export-DbaInstance @exportArgs)
+
+        try {
+            $files = @(Export-DbaInstance @exportArgs)
+        }
+        catch {
+            Write-CollectorError ("Export-DbaInstance failed: {0}" -f $_.Exception.Message)
+            if ($null -ne $_.CategoryInfo) {
+                Write-CollectorError ("Category: {0}" -f $_.CategoryInfo.ToString())
+            }
+            if (-not [string]::IsNullOrWhiteSpace($_.FullyQualifiedErrorId)) {
+                Write-CollectorError ("FullyQualifiedErrorId: {0}" -f $_.FullyQualifiedErrorId)
+            }
+            if ($null -ne $_.InvocationInfo -and -not [string]::IsNullOrWhiteSpace($_.InvocationInfo.PositionMessage)) {
+                Write-CollectorError $_.InvocationInfo.PositionMessage.Trim()
+            }
+            if (-not [string]::IsNullOrWhiteSpace($_.ScriptStackTrace)) {
+                Write-CollectorError $_.ScriptStackTrace
+            }
+            throw
+        }
 
         $fileInfos = @($files | Where-Object { $_ -is [System.IO.FileInfo] -and $_.Exists } | Sort-Object Name, FullName)
         foreach ($file in $fileInfos) {
@@ -351,12 +590,229 @@ function Export-InstanceConfiguration {
         }
 
         Write-CollectorMessage ("Instance export created {0} file(s)" -f $fileInfos.Count)
+
+        if (-not $skipAvailabilityGroups) {
+            Export-AvailabilityGroupConfiguration -ServerObject $ServerObject -TargetDirectory $TargetDirectory -HadrEnabled:$HadrEnabled
+        }
+        else {
+            Write-CollectorMessage 'Skipping Availability Groups because InstanceExclude contains AvailabilityGroups'
+        }
     }
     finally {
         if (Test-Path -LiteralPath $tempRoot) {
             Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
+}
+
+
+function Test-IsLinuxRuntime {
+    try {
+        return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Linux)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Get-ComparableHostName {
+    param([AllowNull()][string]$Value)
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
+    $v = $Value.Trim().TrimEnd('.').ToLowerInvariant()
+    if ($v.Contains('\')) { $v = $v.Split('\')[0] }
+    if ($v.Contains(',')) { $v = $v.Split(',')[0] }
+    if ($v.StartsWith('[') -and $v.Contains(']')) { $v = $v.Trim([char[]]'[]') }
+    return $v
+}
+
+function Test-IsLocalSqlHost {
+    param(
+        [Parameter(Mandatory = $true)]$ServerObject,
+        [Parameter(Mandatory = $true)][string]$SqlInstanceInput
+    )
+
+    if ($CollectLocalHostConfiguration) { return $true }
+    if (-not (Test-IsLinuxRuntime)) { return $false }
+
+    $localNames = New-Object -TypeName 'System.Collections.Generic.HashSet[string]' -ArgumentList ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($name in @('localhost', '127.0.0.1', '::1', [System.Net.Dns]::GetHostName())) {
+        $candidate = Get-ComparableHostName $name
+        if ($candidate) {
+            $null = $localNames.Add($candidate)
+            if ($candidate.Contains('.')) { $null = $localNames.Add($candidate.Split('.')[0]) }
+        }
+    }
+    try {
+        $fqdn = [System.Net.Dns]::GetHostEntry([System.Net.Dns]::GetHostName()).HostName
+        $candidate = Get-ComparableHostName $fqdn
+        if ($candidate) {
+            $null = $localNames.Add($candidate)
+            if ($candidate.Contains('.')) { $null = $localNames.Add($candidate.Split('.')[0]) }
+        }
+    }
+    catch { }
+
+    foreach ($value in @(
+        $SqlInstanceInput,
+        (Get-ObjectPropertyValue $ServerObject 'Name'),
+        (Get-ObjectPropertyValue $ServerObject 'NetName'),
+        (Get-ObjectPropertyValue $ServerObject 'ComputerNamePhysicalNetBIOS'),
+        (Get-ObjectPropertyValue $ServerObject 'DomainInstanceName')
+    )) {
+        $candidate = Get-ComparableHostName ([string]$value)
+        if (-not $candidate) { continue }
+        if ($localNames.Contains($candidate)) { return $true }
+        if ($candidate.Contains('.') -and $localNames.Contains($candidate.Split('.')[0])) { return $true }
+    }
+    return $false
+}
+
+function Convert-MssqlConfToRows {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $rows = @()
+    $section = ''
+    foreach ($raw in [System.IO.File]::ReadAllLines($Path)) {
+        $line = $raw.Trim()
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith('#') -or $line.StartsWith(';')) { continue }
+        if ($line -match '^\[(.+)\]$') {
+            $section = $Matches[1].Trim()
+            continue
+        }
+        $idx = $line.IndexOf('=')
+        if ($idx -lt 0) { continue }
+        $key = $line.Substring(0, $idx).Trim()
+        $value = $line.Substring($idx + 1).Trim()
+        $sensitive = ($key -match '(?i)(password|passwd|secret|token)')
+        if ($sensitive) { $value = '<REDACTED>' }
+        $rows += [pscustomobject][ordered]@{
+            Section = $section
+            Key = $key
+            Value = $value
+            SensitiveValueRedacted = $sensitive
+        }
+    }
+    return @($rows | Sort-Object Section, Key)
+}
+
+function Get-LinuxSqlPackageRows {
+    $rows = @()
+    $dpkg = Get-Command dpkg-query -ErrorAction SilentlyContinue
+    if ($null -ne $dpkg) {
+        try {
+            $lines = @(& $dpkg.Source -W '-f=${Package}\t${Version}\t${Architecture}\n' 2>$null)
+            foreach ($line in $lines) {
+                $parts = [string]$line -split "`t", 3
+                if ($parts.Count -lt 2) { continue }
+                if ($parts[0] -notmatch '^(mssql|msodbcsql)') { continue }
+                $rows += [pscustomobject][ordered]@{ Manager='dpkg'; Name=$parts[0]; Version=$parts[1]; Architecture=if ($parts.Count -gt 2) {$parts[2]} else {$null} }
+            }
+            return @($rows | Sort-Object Name, Version)
+        }
+        catch { }
+    }
+
+    $rpm = Get-Command rpm -ErrorAction SilentlyContinue
+    if ($null -ne $rpm) {
+        try {
+            $lines = @(& $rpm.Source -qa --qf "%{NAME}`t%{VERSION}-%{RELEASE}`t%{ARCH}`n" 2>$null)
+            foreach ($line in $lines) {
+                $parts = [string]$line -split "`t", 3
+                if ($parts.Count -lt 2) { continue }
+                if ($parts[0] -notmatch '^(mssql|msodbcsql)') { continue }
+                $rows += [pscustomobject][ordered]@{ Manager='rpm'; Name=$parts[0]; Version=$parts[1]; Architecture=if ($parts.Count -gt 2) {$parts[2]} else {$null} }
+            }
+        }
+        catch { }
+    }
+    return @($rows | Sort-Object Name, Version)
+}
+
+function Invoke-ExternalTextCommand {
+    param(
+        [Parameter(Mandatory = $true)][string]$Executable,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+    $cmd = Get-Command $Executable -ErrorAction SilentlyContinue
+    if ($null -eq $cmd) { return $null }
+    try {
+        $output = @(& $cmd.Source @Arguments 2>$null)
+        if ($LASTEXITCODE -ne 0) { return $null }
+        return (($output | ForEach-Object { [string]$_ }) -join "`n").TrimEnd() + "`n"
+    }
+    catch {
+        return $null
+    }
+}
+
+function Export-LinuxSqlHostConfiguration {
+    param([Parameter(Mandatory = $true)][string]$TargetDirectory)
+
+    Write-CollectorMessage 'Collecting local SQL Server on Linux host configuration'
+    [System.IO.Directory]::CreateDirectory($TargetDirectory) | Out-Null
+
+    $configPath = '/var/opt/mssql/mssql.conf'
+    if (Test-Path -LiteralPath $configPath) {
+        Copy-Item -LiteralPath $configPath -Destination (Join-Path $TargetDirectory 'mssql.conf') -Force
+        Write-StableCsv -Path (Join-Path $TargetDirectory 'mssql-settings.csv') -Rows (Convert-MssqlConfToRows -Path $configPath)
+    }
+    else {
+        Write-CollectorMessage 'Linux SQL host: /var/opt/mssql/mssql.conf not found'
+        Write-StableCsv -Path (Join-Path $TargetDirectory 'mssql-settings.csv') -Rows @()
+    }
+
+    Write-StableCsv -Path (Join-Path $TargetDirectory 'packages.csv') -Rows (Get-LinuxSqlPackageRows)
+
+    $systemdCat = Invoke-ExternalTextCommand -Executable 'systemctl' -Arguments @('cat', 'mssql-server.service')
+    if ($null -ne $systemdCat) {
+        Write-Utf8Text -Path (Join-Path $TargetDirectory 'mssql-server.service.txt') -Text $systemdCat
+    }
+
+    $showText = Invoke-ExternalTextCommand -Executable 'systemctl' -Arguments @(
+        'show', 'mssql-server.service',
+        '--property=LoadState,UnitFileState,FragmentPath,DropInPaths,User,Group,ExecStart,EnvironmentFiles'
+    )
+    $service = [ordered]@{}
+    if ($null -ne $showText) {
+        foreach ($line in ($showText -split "`n")) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            $idx = $line.IndexOf('=')
+            if ($idx -lt 0) { continue }
+            $service[$line.Substring(0,$idx)] = $line.Substring($idx+1)
+        }
+    }
+    Write-StableJson -Path (Join-Path $TargetDirectory 'service.json') -Value $service
+
+    $paths = [ordered]@{
+        MssqlRoot = '/var/opt/mssql'
+        ConfigFile = $configPath
+        DefaultDataDirectory = '/var/opt/mssql/data'
+        DefaultLogDirectory = '/var/opt/mssql/log'
+        DefaultBackupDirectory = '/var/opt/mssql/data'
+        MssqlConfExecutable = '/opt/mssql/bin/mssql-conf'
+    }
+    Write-StableJson -Path (Join-Path $TargetDirectory 'paths.json') -Value $paths
+}
+
+function Get-SsisFolderIdentifierColumn {
+    param([Parameter(Mandatory = $true)]$ServerObject)
+    Write-CollectorMessage 'SSISDB preflight: detecting catalog.folders identifier column'
+    $table = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'SSISDB' -Query @'
+SELECT c.name
+FROM sys.columns c
+JOIN sys.objects o ON c.object_id = o.object_id
+JOIN sys.schemas s ON o.schema_id = s.schema_id
+WHERE s.name = N'catalog'
+  AND o.name = N'folders'
+  AND c.name IN (N'folder_id', N'id')
+ORDER BY CASE c.name WHEN N'folder_id' THEN 0 ELSE 1 END;
+'@
+    if ($null -eq $table -or $table.Rows.Count -eq 0) {
+        throw 'Unable to determine the identifier column exposed by SSISDB catalog.folders (expected folder_id or id).'
+    }
+    $name = [string]$table.Rows[0]['name']
+    if ($name -notin @('folder_id','id')) { throw "Unexpected SSISDB catalog.folders identifier column '$name'." }
+    Write-CollectorMessage "SSISDB catalog.folders identifier column: $name"
+    return $name
 }
 
 
@@ -388,10 +844,26 @@ function Invoke-QueryTable {
         [Parameter(Mandatory = $true)][string]$DatabaseName,
         [Parameter(Mandatory = $true)][string]$Query
     )
-    $safeDb = $DatabaseName.Replace(']', ']]')
-    $ds = $ServerObject.ConnectionContext.ExecuteWithResults("USE [$safeDb];`n$Query")
+
+    # Use dbatools' supported query execution path rather than calling SMO
+    # SMO ExecuteWithResults directly.  Some environments can query
+    # SSISDB successfully through Invoke-DbaQuery while the reused SMO connection
+    # fails when changing database context.  -As DataSet preserves the DataTable
+    # shape expected by the rest of this collector, including varbinary(max)
+    # project streams returned by SSISDB catalog.get_project.
+    $ds = Invoke-DbaQuery `
+        -SqlInstance $ServerObject `
+        -Database $DatabaseName `
+        -Query $Query `
+        -As DataSet `
+        -EnableException
+
     if ($null -eq $ds -or $ds.Tables.Count -eq 0) { return $null }
-    return $ds.Tables[0]
+
+    # A DataTable is enumerable. Returning it normally through the PowerShell
+    # pipeline can unwrap it into DataRow objects, which breaks callers that
+    # expect .Rows/.Columns. Preserve the DataTable as a single object.
+    Write-Output -NoEnumerate $ds.Tables[0]
 }
 
 function Export-SqlAgentConfiguration {
@@ -521,75 +993,197 @@ function Export-SsisConfiguration {
         [Parameter(Mandatory = $true)]$ServerObject,
         [Parameter(Mandatory = $true)][string]$TargetDirectory,
         [switch]$SkipIspacFiles,
-        [switch]$IncludeLegacy
+        [switch]$IncludeLegacy,
+        [switch]$AllowPartial
     )
+
     if ($null -eq $ServerObject.Databases['SSISDB']) {
         Write-CollectorMessage 'SSISDB is not present; skipping project-deployment SSIS collection'
     }
     else {
         Write-CollectorMessage 'Collecting SSISDB projects, packages, parameters, environments, and references'
         [System.IO.Directory]::CreateDirectory($TargetDirectory) | Out-Null
-        $queries = [ordered]@{
-            'catalog-properties.csv' = 'SELECT property_name, property_value FROM catalog.catalog_properties ORDER BY property_name;'
-            'folders.csv' = 'SELECT id AS folder_id,name,description,created_by_name,created_time FROM catalog.folders ORDER BY name;'
-            'projects.csv' = 'SELECT project_id,folder_id,name,description,project_format_version,deployed_by_name,last_deployed_time,created_time,object_version_lsn FROM catalog.projects ORDER BY folder_id,name;'
-            'packages.csv' = 'SELECT p.package_id,p.project_id,p.name,p.package_guid,p.description,p.package_format_version,p.version_major,p.version_minor,p.version_build,p.version_comments FROM catalog.packages p ORDER BY p.project_id,p.name;'
-            'environment-references.csv' = 'SELECT reference_id,project_id,reference_type,environment_folder_name,environment_name FROM catalog.environment_references ORDER BY project_id,reference_id;'
-            'environments.csv' = 'SELECT environment_id,folder_id,name,description,created_by_name,created_time FROM catalog.environments ORDER BY folder_id,name;'
-            'environment-variables.csv' = "SELECT environment_id,name,description,type,sensitive,CASE WHEN sensitive=1 THEN N'<REDACTED>' ELSE CONVERT(nvarchar(max),value) END AS value FROM catalog.environment_variables ORDER BY environment_id,name;"
-            'object-parameters.csv' = "SELECT project_id,object_type,object_name,parameter_name,data_type,required,sensitive,description,CASE WHEN sensitive=1 THEN N'<REDACTED>' ELSE CONVERT(nvarchar(max),design_default_value) END AS design_default_value,CASE WHEN sensitive=1 THEN N'<REDACTED>' ELSE CONVERT(nvarchar(max),default_value) END AS default_value,value_type,value_set,referenced_variable_name FROM catalog.object_parameters ORDER BY project_id,object_type,object_name,parameter_name;"
-            'explicit-object-permissions.csv' = 'SELECT e.object_type,e.object_id,e.principal_id,p.name AS principal_name,p.type_desc AS principal_type,e.permission_type,e.is_deny,e.grantor_id,g.name AS grantor_name FROM catalog.explicit_object_permissions e LEFT JOIN sys.database_principals p ON e.principal_id=p.principal_id LEFT JOIN sys.database_principals g ON e.grantor_id=g.principal_id ORDER BY e.object_type,e.object_id,p.name,e.permission_type;'
-            'database-role-memberships.csv' = 'SELECT rp.name AS role_name,mp.name AS member_name,mp.type_desc AS member_type FROM sys.database_role_members drm JOIN sys.database_principals rp ON drm.role_principal_id=rp.principal_id JOIN sys.database_principals mp ON drm.member_principal_id=mp.principal_id ORDER BY rp.name,mp.name;'
+
+        # SSISDB catalog views enforce row-level security. A complete, deletion-safe
+        # snapshot can only be guaranteed for sysadmin or SSISDB ssis_admin. Do the
+        # preflight in SSISDB itself. If USE [SSISDB] succeeds, database access is
+        # proven directly; this avoids an unnecessary master/HAS_DBACCESS dependency.
+        Write-CollectorMessage 'SSISDB preflight: checking database status and access'
+        $ssisDatabase = $ServerObject.Databases['SSISDB']
+        $databaseStatus = Convert-ToStableString (Get-ObjectPropertyValue $ssisDatabase 'Status')
+        Write-CollectorMessage "SSISDB preflight: SMO status=$databaseStatus"
+        Write-CollectorMessage 'SSISDB preflight: probing SSISDB and checking sysadmin/ssis_admin membership'
+        try {
+            $roleTable = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'SSISDB' -Query @'
+SELECT
+    DB_NAME() AS database_name,
+    IS_SRVROLEMEMBER(N'sysadmin') AS is_sysadmin,
+    IS_ROLEMEMBER(N'ssis_admin') AS is_ssis_admin,
+    ORIGINAL_LOGIN() AS original_login,
+    SUSER_SNAME() AS login_name,
+    USER_NAME() AS database_user;
+'@
         }
-        foreach ($entry in $queries.GetEnumerator()) {
-            $table = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'SSISDB' -Query $entry.Value
-            if ($null -ne $table) {
-                Write-StableCsv -Path (Join-Path $TargetDirectory $entry.Key) -Rows (Convert-DataTableRows $table)
+        catch {
+            Write-CollectorError ("SSISDB preflight direct-access query failed: {0}" -f $_.Exception.Message)
+            if ($null -ne $_.CategoryInfo) {
+                Write-CollectorError ("Category: {0}" -f $_.CategoryInfo.ToString())
+            }
+            if (-not [string]::IsNullOrWhiteSpace($_.FullyQualifiedErrorId)) {
+                Write-CollectorError ("FullyQualifiedErrorId: {0}" -f $_.FullyQualifiedErrorId)
+            }
+            if ($null -ne $_.InvocationInfo -and -not [string]::IsNullOrWhiteSpace($_.InvocationInfo.PositionMessage)) {
+                Write-CollectorError $_.InvocationInfo.PositionMessage.Trim()
+            }
+            if (-not [string]::IsNullOrWhiteSpace($_.ScriptStackTrace)) {
+                Write-CollectorError $_.ScriptStackTrace
+            }
+            throw "SSISDB exists but the current SQL principal could not query it directly: $($_.Exception.Message)"
+        }
+        if ($null -eq $roleTable -or $roleTable.Rows.Count -eq 0) {
+            throw 'SSISDB preflight direct-access query returned no row.'
+        }
+
+        $databaseName = [string]$roleTable.Rows[0]['database_name']
+        if ($databaseName -ne 'SSISDB') {
+            throw "SSISDB preflight unexpectedly executed in database '$databaseName'."
+        }
+
+        $isSysadmin = 0
+        $isSsisAdmin = 0
+        if ($roleTable.Rows[0]['is_sysadmin'] -isnot [System.DBNull] -and $null -ne $roleTable.Rows[0]['is_sysadmin']) {
+            $isSysadmin = [int]$roleTable.Rows[0]['is_sysadmin']
+        }
+        if ($roleTable.Rows[0]['is_ssis_admin'] -isnot [System.DBNull] -and $null -ne $roleTable.Rows[0]['is_ssis_admin']) {
+            $isSsisAdmin = [int]$roleTable.Rows[0]['is_ssis_admin']
+        }
+        $fullCatalogAccess = ($isSysadmin -eq 1 -or $isSsisAdmin -eq 1)
+        $originalLogin = [string]$roleTable.Rows[0]['original_login']
+        $loginName = [string]$roleTable.Rows[0]['login_name']
+        $databaseUser = [string]$roleTable.Rows[0]['database_user']
+        Write-CollectorMessage "SSISDB preflight: database=$databaseName login=$loginName database_user=$databaseUser is_sysadmin=$isSysadmin is_ssis_admin=$isSsisAdmin full_catalog_visibility=$fullCatalogAccess"
+        Write-StableJson -Path (Join-Path $TargetDirectory 'access.json') -Value ([ordered]@{
+            DatabaseStatus = $databaseStatus
+            HasDatabaseAccess = $true
+            OriginalLogin = $originalLogin
+            LoginName = $loginName
+            DatabaseUser = $databaseUser
+            IsSysadmin = ($isSysadmin -eq 1)
+            IsSsisAdmin = ($isSsisAdmin -eq 1)
+            FullCatalogVisibility = $fullCatalogAccess
+            PartialMode = [bool]$AllowPartial
+        })
+
+        if (-not $fullCatalogAccess -and -not $AllowPartial) {
+            throw 'SSISDB is accessible, but the current principal is neither sysadmin nor a member of SSISDB role ssis_admin. A complete SSIS snapshot cannot be guaranteed because SSIS catalog views use row-level security. Grant appropriate SSISDB access, use -SkipSsis, or explicitly use -AllowPartialSsis if a visibility-limited snapshot is acceptable.'
+        }
+        if (-not $fullCatalogAccess -and $AllowPartial) {
+            Write-CollectorMessage 'WARNING: SSIS partial mode is enabled; only objects visible to the current principal will be collected. Permission changes can look like deletions.'
+        }
+
+        $folderIdColumn = Get-SsisFolderIdentifierColumn -ServerObject $ServerObject
+        $folderIdSql = '[' + $folderIdColumn + ']'
+
+        $querySpecs = @(
+            [pscustomobject]@{ Name='catalog-properties'; File='catalog-properties.csv'; RequiresFull=$true; Query='SELECT property_name, property_value FROM catalog.catalog_properties ORDER BY property_name;' },
+            [pscustomobject]@{ Name='folders'; File='folders.csv'; RequiresFull=$false; Query="SELECT $folderIdSql AS folder_id,name,description,created_by_name,created_time FROM catalog.folders ORDER BY name;" },
+            [pscustomobject]@{ Name='projects'; File='projects.csv'; RequiresFull=$false; Query='SELECT project_id,folder_id,name,description,project_format_version,deployed_by_name,last_deployed_time,created_time,object_version_lsn FROM catalog.projects ORDER BY folder_id,name;' },
+            [pscustomobject]@{ Name='packages'; File='packages.csv'; RequiresFull=$false; Query='SELECT p.package_id,p.project_id,p.name,p.package_guid,p.description,p.package_format_version,p.version_major,p.version_minor,p.version_build,p.version_comments FROM catalog.packages p ORDER BY p.project_id,p.name;' },
+            [pscustomobject]@{ Name='environment-references'; File='environment-references.csv'; RequiresFull=$false; Query='SELECT reference_id,project_id,reference_type,environment_folder_name,environment_name FROM catalog.environment_references ORDER BY project_id,reference_id;' },
+            [pscustomobject]@{ Name='environments'; File='environments.csv'; RequiresFull=$false; Query='SELECT environment_id,folder_id,name,description,created_by_name,created_time FROM catalog.environments ORDER BY folder_id,name;' },
+            [pscustomobject]@{ Name='environment-variables'; File='environment-variables.csv'; RequiresFull=$false; Query="SELECT environment_id,name,description,type,sensitive,CASE WHEN sensitive=1 THEN N'<REDACTED>' ELSE CONVERT(nvarchar(max),value) END AS value FROM catalog.environment_variables ORDER BY environment_id,name;" },
+            [pscustomobject]@{ Name='object-parameters'; File='object-parameters.csv'; RequiresFull=$false; Query="SELECT project_id,object_type,object_name,parameter_name,data_type,required,sensitive,description,CASE WHEN sensitive=1 THEN N'<REDACTED>' ELSE CONVERT(nvarchar(max),design_default_value) END AS design_default_value,CASE WHEN sensitive=1 THEN N'<REDACTED>' ELSE CONVERT(nvarchar(max),default_value) END AS default_value,value_type,value_set,referenced_variable_name FROM catalog.object_parameters ORDER BY project_id,object_type,object_name,parameter_name;" },
+            [pscustomobject]@{ Name='explicit-object-permissions'; File='explicit-object-permissions.csv'; RequiresFull=$false; Query='SELECT e.object_type,e.object_id,e.principal_id,p.name AS principal_name,p.type_desc AS principal_type,e.permission_type,e.is_deny,e.grantor_id,g.name AS grantor_name FROM catalog.explicit_object_permissions e LEFT JOIN sys.database_principals p ON e.principal_id=p.principal_id LEFT JOIN sys.database_principals g ON e.grantor_id=g.principal_id ORDER BY e.object_type,e.object_id,p.name,e.permission_type;' },
+            [pscustomobject]@{ Name='database-role-memberships'; File='database-role-memberships.csv'; RequiresFull=$false; Query='SELECT rp.name AS role_name,mp.name AS member_name,mp.type_desc AS member_type FROM sys.database_role_members drm JOIN sys.database_principals rp ON drm.role_principal_id=rp.principal_id JOIN sys.database_principals mp ON drm.member_principal_id=mp.principal_id ORDER BY rp.name,mp.name;' }
+        )
+
+        foreach ($spec in $querySpecs) {
+            if ($spec.RequiresFull -and -not $fullCatalogAccess) {
+                Write-CollectorMessage "SSIS metadata: skipping $($spec.Name) because full SSIS catalog visibility is unavailable"
+                continue
+            }
+            Write-CollectorMessage "SSIS metadata: $($spec.Name)"
+            try {
+                $table = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'SSISDB' -Query $spec.Query
+                $rowCount = if ($null -eq $table) { 0 } else { $table.Rows.Count }
+                Write-CollectorMessage "SSIS metadata: $($spec.Name) -> $rowCount row(s)"
+                if ($rowCount -gt 0) {
+                    Write-StableCsv -Path (Join-Path $TargetDirectory $spec.File) -Rows (Convert-DataTableRows $table)
+                }
+                else {
+                    Write-StableCsv -Path (Join-Path $TargetDirectory $spec.File) -Rows @()
+                }
+            }
+            catch {
+                throw "SSIS metadata query '$($spec.Name)' failed: $($_.Exception.Message)"
             }
         }
 
-        $projectTable = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'SSISDB' -Query @'
+        Write-CollectorMessage 'SSIS projects: discovering visible deployed projects'
+        try {
+            $projectTable = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'SSISDB' -Query @"
 SELECT p.project_id,p.name AS project_name,f.name AS folder_name
-FROM catalog.projects p JOIN catalog.folders f ON p.folder_id=f.folder_id
+FROM catalog.projects p JOIN catalog.folders f ON p.folder_id=f.$folderIdSql
 ORDER BY f.name,p.name;
-'@
-        foreach ($row in @($projectTable.Rows)) {
+"@
+        }
+        catch {
+            throw "SSIS project discovery failed: $($_.Exception.Message)"
+        }
+
+        $projectRows = if ($null -eq $projectTable) { @() } else { @($projectTable.Rows) }
+        Write-CollectorMessage "SSIS projects: $($projectRows.Count) visible project(s)"
+        foreach ($row in $projectRows) {
             $folderName = [string]$row['folder_name']
             $projectName = [string]$row['project_name']
-            $folderDir = Get-SafePathSegment -Value $folderName
-            $projectDir = Get-SafePathSegment -Value $projectName
-            $targetProject = Join-Path (Join-Path (Join-Path $TargetDirectory 'projects') $folderDir) $projectDir
-            [System.IO.Directory]::CreateDirectory($targetProject) | Out-Null
-            $folderLit = Get-SqlLiteral $folderName
-            $projectLit = Get-SqlLiteral $projectName
-            $streamTable = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'SSISDB' -Query "EXEC catalog.get_project @folder_name=$folderLit, @project_name=$projectLit;"
-            if ($null -eq $streamTable -or $streamTable.Rows.Count -eq 0) { throw "SSISDB returned no project stream for $folderName/$projectName" }
-            $projectBytes = $streamTable.Rows[0][0]
-            if ($projectBytes -isnot [byte[]]) { throw "Unexpected SSIS project stream type for $folderName/$projectName" }
-            $tempIspac = Join-Path ([System.IO.Path]::GetTempPath()) ("configbackup-" + [guid]::NewGuid().ToString('N') + '.ispac')
-            [System.IO.File]::WriteAllBytes($tempIspac, $projectBytes)
+            Write-CollectorMessage "SSIS project export: $folderName/$projectName"
             try {
-                if (-not $SkipIspacFiles) {
-                    Copy-Item -LiteralPath $tempIspac -Destination (Join-Path $targetProject ($projectDir + '.ispac')) -Force
+                $folderDir = Get-SafePathSegment -Value $folderName
+                $projectDir = Get-SafePathSegment -Value $projectName
+                $targetProject = Join-Path (Join-Path (Join-Path $TargetDirectory 'projects') $folderDir) $projectDir
+                [System.IO.Directory]::CreateDirectory($targetProject) | Out-Null
+                $folderLit = Get-SqlLiteral $folderName
+                $projectLit = Get-SqlLiteral $projectName
+                $streamTable = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'SSISDB' -Query "EXEC catalog.get_project @folder_name=$folderLit, @project_name=$projectLit;"
+                if ($null -eq $streamTable -or $streamTable.Rows.Count -eq 0) { throw 'catalog.get_project returned no project stream' }
+                $projectBytes = $streamTable.Rows[0][0]
+                if ($null -eq $projectBytes) { throw 'catalog.get_project returned a null project stream' }
+                if ($projectBytes -isnot [byte[]]) { throw "catalog.get_project returned unexpected stream type '$($projectBytes.GetType().FullName)'" }
+                $tempIspac = Join-Path ([System.IO.Path]::GetTempPath()) ("configbackup-" + [guid]::NewGuid().ToString('N') + '.ispac')
+                [System.IO.File]::WriteAllBytes($tempIspac, $projectBytes)
+                try {
+                    if (-not $SkipIspacFiles) {
+                        Copy-Item -LiteralPath $tempIspac -Destination (Join-Path $targetProject ($projectDir + '.ispac')) -Force
+                    }
+                    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+                    $expanded = Join-Path $targetProject 'expanded'
+                    if (Test-Path -LiteralPath $expanded) { Remove-Item -LiteralPath $expanded -Recurse -Force }
+                    [System.IO.Compression.ZipFile]::ExtractToDirectory($tempIspac, $expanded)
                 }
-                Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
-                $expanded = Join-Path $targetProject 'expanded'
-                if (Test-Path -LiteralPath $expanded) { Remove-Item -LiteralPath $expanded -Recurse -Force }
-                [System.IO.Compression.ZipFile]::ExtractToDirectory($tempIspac, $expanded)
+                finally {
+                    Remove-Item -LiteralPath $tempIspac -Force -ErrorAction SilentlyContinue
+                }
             }
-            finally {
-                Remove-Item -LiteralPath $tempIspac -Force -ErrorAction SilentlyContinue
+            catch {
+                throw "SSIS project export failed for '$folderName/$projectName': $($_.Exception.Message)"
             }
         }
+        Write-CollectorMessage 'SSISDB project-deployment collection completed'
     }
 
     if ($IncludeLegacy) {
         Write-CollectorMessage 'Collecting legacy MSDB SSIS package metadata and package data'
         $legacyDir = Join-Path $TargetDirectory 'legacy-msdb'
         [System.IO.Directory]::CreateDirectory($legacyDir) | Out-Null
-        $legacy = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'msdb' -Query 'SELECT id,name,description,folderid,ownersid,packagedata,packageformat FROM dbo.sysssispackages ORDER BY name,id;'
+        try {
+            $legacy = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'msdb' -Query 'SELECT id,name,description,folderid,ownersid,packagedata,packageformat FROM dbo.sysssispackages ORDER BY name,id;'
+        }
+        catch {
+            throw "Legacy MSDB SSIS package query failed: $($_.Exception.Message)"
+        }
         $metadata = @()
-        foreach ($row in @($legacy.Rows)) {
+        $legacyRows = if ($null -eq $legacy) { @() } else { @($legacy.Rows) }
+        foreach ($row in $legacyRows) {
             $name = [string]$row['name']
             $id = [string]$row['id']
             $safe = (Get-SafePathSegment -Value $name) + '__' + (Get-ShortHash -Value $id)
@@ -602,6 +1196,7 @@ ORDER BY f.name,p.name;
             }
         }
         Write-StableCsv -Path (Join-Path $legacyDir 'packages.csv') -Rows $metadata
+        Write-CollectorMessage "Legacy SSIS: $($legacyRows.Count) package(s) collected"
     }
 }
 
@@ -641,10 +1236,15 @@ try {
         $sqlPackageVersion = $versionOutput
     }
 
+    Assert-SafeAppendConnectionString -Value $AppendConnectionString
+
     $connectArgs = @{
         SqlInstance    = $SqlInstance
         ClientName     = 'ConfigBackup.SqlCollector'
         ConnectTimeout = $ConnectTimeout
+    }
+    if (-not [string]::IsNullOrWhiteSpace($AppendConnectionString)) {
+        $connectArgs.AppendConnectionString = $AppendConnectionString.Trim().Trim(';') + ';'
     }
     if ($TrustServerCertificate) {
         $connectArgs.TrustServerCertificate = $true
@@ -677,6 +1277,9 @@ try {
 
     Write-CollectorMessage ("Selected {0} database(s)" -f $databases.Count)
 
+    $hadrEnabled = Get-HadrEnabled -ServerObject $server
+    Write-CollectorMessage ("HADR enabled: {0}" -f $hadrEnabled)
+
     $instanceDirectory = Join-Path $OutputDirectory 'instance'
     $databaseRoot = Join-Path $OutputDirectory 'databases'
     [System.IO.Directory]::CreateDirectory($instanceDirectory) | Out-Null
@@ -695,6 +1298,7 @@ try {
         Collation                 = Convert-ToStableString (Get-ObjectPropertyValue $server 'Collation')
         IsClustered               = Convert-ToStableString (Get-ObjectPropertyValue $server 'IsClustered')
         HostPlatform              = Convert-ToStableString (Get-ObjectPropertyValue $server 'HostPlatform')
+        IsHadrEnabled             = $hadrEnabled
     }
     Write-StableJson -Path (Join-Path $instanceDirectory 'server.json') -Value $serverInfo
 
@@ -706,6 +1310,7 @@ try {
         DbatoolsVersion       = if ($null -ne $loadedDbatools) { $loadedDbatools.Version.ToString() } else { $null }
         SqlPackageVersion     = $sqlPackageVersion
         SchemaExtraction      = (-not $SkipSchema)
+        VerifySchemaExtraction = [bool]$VerifySchemaExtraction
         InstanceExport        = (-not $SkipInstanceExport)
         Inventory             = (-not $SkipInventory)
         PasswordMaterial      = 'excluded'
@@ -713,8 +1318,29 @@ try {
         Ssis                   = (-not $SkipSsis)
         IspacFiles             = (-not $SkipIspac)
         LegacySsis             = [bool]$IncludeLegacySsis
+        SsisPartialMode         = [bool]$AllowPartialSsis
+        HostConfiguration       = (-not $SkipHostConfiguration)
+        ForceLocalHostConfig    = [bool]$CollectLocalHostConfiguration
     }
     Write-StableJson -Path (Join-Path $OutputDirectory 'collector.json') -Value $collectorInfo
+
+    if (-not $SkipHostConfiguration) {
+        $hostPlatform = [string](Get-ObjectPropertyValue $server 'HostPlatform')
+        if ($hostPlatform -match '^(?i:Linux)$') {
+            if (Test-IsLinuxRuntime) {
+                $isLocalSqlHost = Test-IsLocalSqlHost -ServerObject $server -SqlInstanceInput $SqlInstance
+                if ($isLocalSqlHost) {
+                    Export-LinuxSqlHostConfiguration -TargetDirectory (Join-Path $instanceDirectory 'host-linux')
+                }
+                else {
+                    Write-CollectorMessage 'SQL Server reports Linux, but it does not appear to be the local host; skipping host-level Linux files'
+                }
+            }
+            else {
+                Write-CollectorMessage 'SQL Server reports Linux, but the collector is not running on Linux; skipping host-level Linux files'
+            }
+        }
+    }
 
     $databaseMap = @()
     $usedDatabaseDirectories = @{}
@@ -748,6 +1374,7 @@ try {
             ServerObject       = $server
             TargetDirectory    = (Join-Path $instanceDirectory 'scripts')
             AdditionalExcludes = $InstanceExclude
+            HadrEnabled        = $hadrEnabled
         }
         Export-InstanceConfiguration @instanceExportArgs
     }
@@ -757,7 +1384,7 @@ try {
     }
 
     if (-not $SkipSsis) {
-        Export-SsisConfiguration -ServerObject $server -TargetDirectory (Join-Path $instanceDirectory 'ssis') -SkipIspacFiles:$SkipIspac -IncludeLegacy:$IncludeLegacySsis
+        Export-SsisConfiguration -ServerObject $server -TargetDirectory (Join-Path $instanceDirectory 'ssis') -SkipIspacFiles:$SkipIspac -IncludeLegacy:$IncludeLegacySsis -AllowPartial:$AllowPartialSsis
     }
 
     foreach ($db in $databases) {
@@ -792,6 +1419,8 @@ try {
                 TargetDirectory = (Join-Path $dbDirectory 'schema')
                 TimeoutSeconds  = $ConnectTimeout
                 TrustCertificate = [bool]$TrustServerCertificate
+                VerifyExtraction = [bool]$VerifySchemaExtraction
+                AdditionalConnectionOptions = $AppendConnectionString
             }
             Invoke-SqlPackageExtract @extractArgs
         }

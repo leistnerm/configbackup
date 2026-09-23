@@ -4,11 +4,21 @@ backup:
   include_hostname: true
 
 git:
-  repository: 'C:\ConfigBackupGit'
-  # remote_url: 'git@github.com:example/sql-config-history.git'
-  branch: main
-  push: false
+  repository: 'C:\Repos\Infrastructure'
+  mode: pull_request
+  base_branch: auto
+  branch: 'configbackup/{hostname}'
+  remote_name: origin
+  push: true
   include_hostname: true
+  path_prefix: configbackup
+  ignore:
+    - '**/*.ispac'
+  pull_request:
+    enabled: true
+    provider: github
+    title: 'ConfigBackup: {hostname}'
+    draft: false
 
 variables:
   PYTHON: 'py'

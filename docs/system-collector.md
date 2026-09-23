@@ -43,12 +43,19 @@ Windows collection includes best-effort snapshots of:
 - Signed Plug-and-Play driver inventory.
 - Installed .NET runtimes/SDKs when `dotnet` is available.
 - Local users/groups and memberships.
-- Windows Firewall profiles and rules.
+- Windows Firewall effective profiles and complete rule conditions (direction/action, addresses, protocol/ports, program/service, interfaces, ICMP/security conditions, and policy source). Both structured JSON and a flat CSV with a human-readable `Summary` are emitted.
 - SMB shares and share ACLs; NFS shares when the NFS cmdlets are installed.
 - Time zone/culture and active power scheme.
 - Pagefile and current boot configuration.
 
 Many Windows storage/firewall/package commands expose more data when run elevated. Missing optional data is recorded in `collection-errors.json` rather than making the normal collector fail.
+
+
+### Windows Firewall output
+
+`network/firewall-rules.json` contains the full effective rule definition from the Windows Firewall `ActiveStore`. The collector follows each `Get-NetFirewallRule` object to its associated address, port/protocol, application, service, interface, interface-type, and security filter objects. Windows stores these match conditions separately from the base rule, so exporting only `Get-NetFirewallRule` does not describe what traffic a rule actually matches.
+
+`network/firewall-rules.csv` flattens the important fields and adds a `Summary` field. For example: `Inbound Block TCP local-port=445 remote-address=192.0.2.10`. The individual columns remain authoritative for rules with multiple addresses, ports, profiles, application/service restrictions, or IPsec security conditions.
 
 ## Linux-specific inventory
 

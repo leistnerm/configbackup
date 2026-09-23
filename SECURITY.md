@@ -42,3 +42,7 @@ ConfigBackup includes several safeguards:
 - `--dry-run` and `--prune --dry-run` are available for validation.
 
 Run new configurations with `--validate` and `--dry-run` before scheduling them unattended.
+
+## SQL Server on Linux host artifacts
+
+When the SQL collector runs locally on a Linux SQL Server guest it can copy `/var/opt/mssql/mssql.conf` and systemd service configuration. These files normally contain configuration rather than database credentials, but they can reveal certificate/key paths, directory layout, service environment references, domain/account names, ports, and other operationally sensitive information. Treat them as confidential and review local customizations before pushing them to a remote Git repository. The parsed `mssql-settings.csv` redacts keys whose names look password/secret/token related, but the raw `mssql.conf` is preserved verbatim for recoverability.

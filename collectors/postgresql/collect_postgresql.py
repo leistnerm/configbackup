@@ -30,7 +30,7 @@ import sys
 from pathlib import Path
 from typing import Any, Iterable
 
-COLLECTOR_VERSION = "1.3.0"
+COLLECTOR_VERSION = "1.3.14"
 
 
 class CollectorError(RuntimeError):

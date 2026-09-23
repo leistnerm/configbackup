@@ -350,6 +350,248 @@ tasks:
                 cb.ConfigLoader(cfg_path).load()
 
 
+
+    def test_git_ignore_keeps_ispac_in_filesystem_but_not_git(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            source = base / "source"
+            source.mkdir()
+            (source / "project.ispac").write_bytes(b"binary-ispac")
+            (source / "package.dtsx").write_text("<DTS />\n", encoding="utf-8")
+            cfg_path = base / "config.yaml"
+            cfg_path.write_text(
+                f"""
+backup:
+  root: {base / 'archive'}
+git:
+  repository: {base / 'repo'}
+  path_prefix: snapshots
+  ignore:
+    - '**/*.ispac'
+options:
+  log_level: CRITICAL
+tasks:
+  - name: sql
+    type: directory
+    source: {source}
+    destination: sql
+    storage: both
+""",
+                encoding="utf-8",
+            )
+            cfg = cb.ConfigLoader(cfg_path).load()
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = cb.BackupEngine(cfg).run()
+            self.assertEqual(rc, 0)
+            self.assertEqual(len(list((base / "archive" / "sql").glob("project.*.ispac"))), 1)
+            self.assertTrue((base / "repo" / "snapshots" / "sql" / "package.dtsx").exists())
+            self.assertFalse((base / "repo" / "snapshots" / "sql" / "project.ispac").exists())
+            ignore_text = (base / "repo" / "snapshots" / ".gitignore").read_text(encoding="utf-8")
+            self.assertIn("**/*.ispac", ignore_text)
+            tracked = subprocess.check_output(
+                ["git", "-C", str(base / "repo"), "ls-files"], text=True
+            ).splitlines()
+            self.assertFalse(any(x.endswith(".ispac") for x in tracked))
+
+    def test_git_ignore_untracks_previously_tracked_file(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            source = base / "source"
+            source.mkdir()
+            (source / "project.ispac").write_bytes(b"binary-ispac")
+            cfg_path = base / "config.yaml"
+
+            def write_config(ignore_block: str):
+                cfg_path.write_text(
+                    f"""
+backup:
+  root: {base / 'archive'}
+git:
+  repository: {base / 'repo'}
+  path_prefix: snapshots
+{ignore_block}
+options:
+  log_level: CRITICAL
+tasks:
+  - name: sql
+    type: directory
+    source: {source}
+    destination: sql
+    storage: git
+""",
+                    encoding="utf-8",
+                )
+
+            write_config("")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(cb.BackupEngine(cb.ConfigLoader(cfg_path).load()).run(), 0)
+            self.assertTrue((base / "repo" / "snapshots" / "sql" / "project.ispac").exists())
+
+            write_config("  ignore:\n    - '**/*.ispac'")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(cb.BackupEngine(cb.ConfigLoader(cfg_path).load()).run(), 0)
+            self.assertFalse((base / "repo" / "snapshots" / "sql" / "project.ispac").exists())
+            tracked = subprocess.check_output(
+                ["git", "-C", str(base / "repo"), "ls-files"], text=True
+            ).splitlines()
+            self.assertFalse(any(x.endswith(".ispac") for x in tracked))
+
+    def test_git_pull_request_mode_uses_isolated_worktree_and_leaves_main_dirty(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            remote = base / "remote.git"
+            repo = base / "repo"
+            subprocess.run(["git", "init", "--bare", str(remote)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "tester@example.invalid"], check=True)
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "README.md"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-m", "base"], check=True, stdout=subprocess.PIPE)
+            subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", str(remote)], check=True)
+            subprocess.run(["git", "-C", str(repo), "push", "-u", "origin", "main"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(["git", "--git-dir", str(remote), "symbolic-ref", "HEAD", "refs/heads/main"], check=True)
+
+            # Deliberately dirty the user's normal checkout. PR/worktree mode must not touch it.
+            (repo / "README.md").write_text("local uncommitted edit\n", encoding="utf-8")
+            source = base / "source.txt"
+            source.write_text("snapshot\n", encoding="utf-8")
+            cfg_path = base / "config.yaml"
+            cfg_path.write_text(
+                f"""
+backup:
+  root: {base / 'state'}
+git:
+  repository: {repo}
+  mode: pull_request
+  base_branch: auto
+  branch: configbackup/test-host
+  remote_name: origin
+  push: true
+  path_prefix: configbackup
+  pull_request:
+    enabled: false
+options:
+  log_level: CRITICAL
+tasks:
+  - name: one-file
+    type: file
+    source: {source}
+    destination: current/source.txt
+    storage: git
+""",
+                encoding="utf-8",
+            )
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(cb.BackupEngine(cb.ConfigLoader(cfg_path).load()).run(), 0)
+
+            self.assertEqual((repo / "README.md").read_text(encoding="utf-8"), "local uncommitted edit\n")
+            self.assertEqual(
+                subprocess.check_output(["git", "-C", str(repo), "branch", "--show-current"], text=True).strip(),
+                "main",
+            )
+            remote_file = subprocess.check_output(
+                ["git", "--git-dir", str(remote), "show", "refs/heads/configbackup/test-host:configbackup/current/source.txt"],
+                text=True,
+            )
+            self.assertEqual(remote_file, "snapshot\n")
+
+    def test_github_pull_request_mode_invokes_gh_create(self):
+        import os
+        import subprocess
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            remote = base / "remote.git"
+            repo = base / "repo"
+            bin_dir = base / "bin"
+            bin_dir.mkdir()
+            gh_log = base / "gh.log"
+            gh = bin_dir / "gh"
+            gh.write_text(
+                "#!/bin/sh\n"
+                f"echo \"$@\" >> '{gh_log}'\n"
+                "if [ \"$1 $2\" = \"pr list\" ]; then echo '[]'; exit 0; fi\n"
+                "if [ \"$1 $2\" = \"pr create\" ]; then echo 'https://github.example/pr/1'; exit 0; fi\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            gh.chmod(0o755)
+            subprocess.run(["git", "init", "--bare", str(remote)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "tester@example.invalid"], check=True)
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "README.md"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-m", "base"], check=True, stdout=subprocess.PIPE)
+            subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", str(remote)], check=True)
+            subprocess.run(["git", "-C", str(repo), "push", "-u", "origin", "main"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(["git", "--git-dir", str(remote), "symbolic-ref", "HEAD", "refs/heads/main"], check=True)
+            source = base / "source.txt"
+            source.write_text("snapshot\n", encoding="utf-8")
+            cfg_path = base / "config.yaml"
+            cfg_path.write_text(
+                f"""
+backup:
+  root: {base / 'state'}
+git:
+  repository: {repo}
+  mode: pull_request
+  branch: configbackup/test-pr
+  remote_name: origin
+  push: true
+  path_prefix: configbackup
+  pull_request:
+    enabled: true
+    provider: github
+    title: 'Config snapshot {{hostname}}'
+options:
+  log_level: CRITICAL
+tasks:
+  - name: one-file
+    type: file
+    source: {source}
+    destination: current/source.txt
+    storage: git
+""",
+                encoding="utf-8",
+            )
+            env = dict(os.environ)
+            env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
+            with mock.patch.dict(os.environ, env, clear=True):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(cb.BackupEngine(cb.ConfigLoader(cfg_path).load()).run(), 0)
+            log = gh_log.read_text(encoding="utf-8")
+            self.assertIn("auth status", log)
+            self.assertIn("pr list", log)
+            self.assertIn("pr create", log)
+            self.assertIn("--base main", log)
+            self.assertIn("--head configbackup/test-pr", log)
+
+    def test_empty_git_section_is_treated_as_empty_mapping(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg_path = Path(td) / "config.yaml"
+            source = Path(td) / "x.txt"
+            source.write_text("x\n", encoding="utf-8")
+            cfg_path.write_text(
+                f"""
+backup:
+  root: {td}/state
+git:
+tasks:
+  - name: x
+    type: file
+    source: {source}
+""",
+                encoding="utf-8",
+            )
+            cfg = cb.ConfigLoader(cfg_path).load()
+            self.assertIsInstance(cfg["git"], dict)
+            self.assertEqual(cfg["git"]["mode"], "direct")
+
     def test_git_storage_validation_requires_repository(self):
         with tempfile.TemporaryDirectory() as td:
             cfg_path = Path(td) / "config.yaml"

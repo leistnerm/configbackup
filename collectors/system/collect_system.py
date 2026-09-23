@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 from typing import Any, Iterable
 
-COLLECTOR_VERSION = "1.3.0"
+COLLECTOR_VERSION = "1.3.14"
 
 
 def eprint(msg: str) -> None:
@@ -373,6 +373,64 @@ def collect_linux(root: Path, args: argparse.Namespace, failures: list[dict[str,
                 stable_text(root / "network" / "firewall-iptables.txt", cp.stdout)
 
 
+
+WINDOWS_FIREWALL_CSV_FIELDS = [
+    "Summary", "Name", "DisplayName", "Enabled", "Direction", "Action", "Profile",
+    "Protocol", "LocalAddress", "LocalPort", "RemoteAddress", "RemotePort", "IcmpType",
+    "Program", "Service", "Package", "InterfaceAlias", "InterfaceType",
+    "EdgeTraversalPolicy", "Authentication", "Encryption", "OverrideBlockRules",
+    "LocalUser", "RemoteUser", "RemoteMachine", "PolicyStoreSource",
+    "PolicyStoreSourceType", "Group", "DisplayGroup", "Description", "PrimaryStatus",
+]
+
+
+def _fw_values(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return [str(x) for x in value if x is not None and str(x) != ""]
+    text = str(value)
+    return [] if text == "" else [text]
+
+
+def _fw_display(value: Any, default: str = "Any") -> str:
+    values = _fw_values(value)
+    return ";".join(values) if values else default
+
+
+def windows_firewall_rule_summary(rule: dict[str, Any]) -> str:
+    direction = _fw_display(rule.get("Direction"), "Any-direction")
+    action = _fw_display(rule.get("Action"), "Unknown-action")
+    protocol = _fw_display(rule.get("Protocol"), "Any")
+    parts = [direction, action, protocol]
+
+    for key, label in (
+        ("LocalPort", "local-port"),
+        ("RemotePort", "remote-port"),
+        ("LocalAddress", "local-address"),
+        ("RemoteAddress", "remote-address"),
+    ):
+        value = _fw_display(rule.get(key))
+        if value.lower() != "any":
+            parts.append(f"{label}={value}")
+
+    for key, label in (
+        ("Program", "program"),
+        ("Service", "service"),
+        ("InterfaceAlias", "interface"),
+        ("InterfaceType", "interface-type"),
+    ):
+        value = _fw_display(rule.get(key))
+        if value.lower() not in {"any", "notapplicable", "none"}:
+            parts.append(f"{label}={value}")
+    return " ".join(parts)
+
+
+def flatten_windows_firewall_rule(rule: dict[str, Any]) -> dict[str, Any]:
+    flat = {k: rule.get(k) for k in WINDOWS_FIREWALL_CSV_FIELDS if k != "Summary"}
+    flat["Summary"] = windows_firewall_rule_summary(rule)
+    return flat
+
 def collect_windows(root: Path, args: argparse.Namespace, failures: list[dict[str, str]]) -> None:
     # Hardware / OS
     computer = best_effort("hardware.computer", lambda: run_ps_json(
@@ -529,15 +587,67 @@ def collect_windows(root: Path, args: argparse.Namespace, failures: list[dict[st
 
     if not args.skip_firewall:
         fw_profiles = best_effort("network.firewall-profiles", lambda: run_ps_json(
-            "Get-NetFirewallProfile | Sort-Object Name | Select-Object Name,Enabled,DefaultInboundAction,DefaultOutboundAction,AllowInboundRules,AllowLocalFirewallRules,NotifyOnListen,LogFileName,LogMaxSizeKilobytes,LogAllowed,LogBlocked"
+            "Get-NetFirewallProfile -PolicyStore ActiveStore | Sort-Object Name | Select-Object Name,Enabled,DefaultInboundAction,DefaultOutboundAction,AllowInboundRules,AllowLocalFirewallRules,NotifyOnListen,LogFileName,LogMaxSizeKilobytes,LogAllowed,LogBlocked"
         ), failures)
-        fw_rules = best_effort("network.firewall-rules", lambda: run_ps_json(
-            "Get-NetFirewallRule | Sort-Object DisplayName,Name | Select-Object Name,DisplayName,Description,Group,Enabled,Profile,Direction,Action,EdgeTraversalPolicy,PolicyStoreSourceType,PrimaryStatus"
-        , timeout=180), failures)
+        firewall_script = r'''$rules = @(Get-NetFirewallRule -PolicyStore ActiveStore | Sort-Object DisplayName,Name)
+foreach ($r in $rules) {
+    $address = $r | Get-NetFirewallAddressFilter -ErrorAction SilentlyContinue
+    $port = $r | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue
+    $application = $r | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue
+    $service = $r | Get-NetFirewallServiceFilter -ErrorAction SilentlyContinue
+    $interface = $r | Get-NetFirewallInterfaceFilter -ErrorAction SilentlyContinue
+    $interfaceType = $r | Get-NetFirewallInterfaceTypeFilter -ErrorAction SilentlyContinue
+    $security = $r | Get-NetFirewallSecurityFilter -ErrorAction SilentlyContinue
+
+    [pscustomobject]@{
+        Name = $r.Name
+        DisplayName = $r.DisplayName
+        Description = $r.Description
+        DisplayGroup = $r.DisplayGroup
+        Group = $r.Group
+        Enabled = [string]$r.Enabled
+        Profile = [string]$r.Profile
+        Direction = [string]$r.Direction
+        Action = [string]$r.Action
+        EdgeTraversalPolicy = [string]$r.EdgeTraversalPolicy
+        LooseSourceMapping = $r.LooseSourceMapping
+        LocalOnlyMapping = $r.LocalOnlyMapping
+        Owner = $r.Owner
+        PolicyStoreSource = $r.PolicyStoreSource
+        PolicyStoreSourceType = [string]$r.PolicyStoreSourceType
+        PrimaryStatus = [string]$r.PrimaryStatus
+        Status = [string]$r.Status
+        StatusCode = $r.StatusCode
+        LocalAddress = @($address.LocalAddress)
+        RemoteAddress = @($address.RemoteAddress)
+        Protocol = [string]$port.Protocol
+        LocalPort = @($port.LocalPort)
+        RemotePort = @($port.RemotePort)
+        IcmpType = @($port.IcmpType)
+        DynamicTransport = [string]$port.DynamicTransport
+        Program = [string]$application.Program
+        Package = [string]$application.Package
+        Service = [string]$service.Service
+        InterfaceAlias = @($interface.InterfaceAlias)
+        InterfaceType = @($interfaceType.InterfaceType)
+        Authentication = [string]$security.Authentication
+        Encryption = [string]$security.Encryption
+        OverrideBlockRules = [string]$security.OverrideBlockRules
+        LocalUser = [string]$security.LocalUser
+        RemoteUser = [string]$security.RemoteUser
+        RemoteMachine = [string]$security.RemoteMachine
+    }
+}
+'''
+        fw_rules = best_effort("network.firewall-rules", lambda: run_ps_json(firewall_script, timeout=300), failures)
         if fw_profiles is not None:
             stable_json(root / "network" / "firewall-profiles.json", fw_profiles)
         if fw_rules is not None:
+            if isinstance(fw_rules, dict):
+                fw_rules = [fw_rules]
             stable_json(root / "network" / "firewall-rules.json", fw_rules)
+            flattened_rules = [flatten_windows_firewall_rule(x) for x in fw_rules]
+            stable_csv(root / "network" / "firewall-rules.csv", flattened_rules, WINDOWS_FIREWALL_CSV_FIELDS)
 
     # Paging / boot configuration.
     paging = best_effort("os.pagefile", lambda: run_ps_json(

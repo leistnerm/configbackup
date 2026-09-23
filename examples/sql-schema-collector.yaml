@@ -65,6 +65,10 @@ tasks:
       # - 'ScratchDb,Test*'
       # - -IncludeSystemDatabases
       # - -TrustServerCertificate
+      # - -AppendConnectionString
+      # - 'MultiSubnetFailover=True;ApplicationIntent=ReadOnly'
+      # Optional: ask DacFx to verify the extracted schema model. Disabled by default.
+      # - -VerifySchemaExtraction
       # - -SkipAgent
       # - -SkipSsis
       # - -SkipIspac       # useful for Git-focused histories
