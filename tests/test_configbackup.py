@@ -571,6 +571,166 @@ tasks:
             self.assertIn("--base main", log)
             self.assertIn("--head configbackup/test-pr", log)
 
+
+    def test_git_pull_request_mode_cleans_legacy_configbackup_worktree_for_branch(self):
+        import shutil
+        import subprocess
+        import uuid
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            remote = base / "remote.git"
+            repo = base / "repo"
+            subprocess.run(["git", "init", "--bare", str(remote)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Tester"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "tester@example.invalid"], check=True)
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "README.md"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-m", "base"], check=True, stdout=subprocess.PIPE)
+            subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", str(remote)], check=True)
+            subprocess.run(["git", "-C", str(repo), "push", "-u", "origin", "main"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(["git", "--git-dir", str(remote), "symbolic-ref", "HEAD", "refs/heads/main"], check=True)
+
+            # Simulate the 1.4.0 layout left behind by an interrupted/failed run.
+            legacy_root = Path(tempfile.gettempdir()) / "configbackup" / f"test-{uuid.uuid4().hex}"
+            legacy_worktree = legacy_root / "git-worktrees" / "configbackup_test-host"
+            legacy_worktree.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                subprocess.run(
+                    ["git", "-C", str(repo), "worktree", "add", "-b", "configbackup/test-host", str(legacy_worktree), "main"],
+                    check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+
+                source = base / "source.txt"
+                source.write_text("snapshot\n", encoding="utf-8")
+                cfg_path = base / "config.yaml"
+                cfg_path.write_text(
+                    f"""
+backup:
+  root: {base / 'state'}
+git:
+  repository: {repo}
+  mode: pull_request
+  base_branch: auto
+  branch: configbackup/test-host
+  remote_name: origin
+  push: true
+  path_prefix: configbackup
+  pull_request:
+    enabled: false
+options:
+  log_level: CRITICAL
+tasks:
+  - name: one-file
+    type: file
+    source: {source}
+    destination: current/source.txt
+    storage: git
+""",
+                    encoding="utf-8",
+                )
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(cb.BackupEngine(cb.ConfigLoader(cfg_path).load()).run(), 0)
+
+                listing = subprocess.check_output(
+                    ["git", "-C", str(repo), "worktree", "list", "--porcelain"], text=True
+                )
+                self.assertNotIn(str(legacy_worktree), listing)
+                self.assertFalse(legacy_worktree.exists())
+                remote_file = subprocess.check_output(
+                    ["git", "--git-dir", str(remote), "show", "refs/heads/configbackup/test-host:configbackup/current/source.txt"],
+                    text=True,
+                )
+                self.assertEqual(remote_file, "snapshot\n")
+            finally:
+                subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", str(legacy_worktree)], check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                subprocess.run(["git", "-C", str(repo), "worktree", "prune"], check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                shutil.rmtree(legacy_root, ignore_errors=True)
+
+    def test_git_pull_request_default_worktree_uses_short_temp_root(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            source = base / "source.txt"
+            source.write_text("snapshot\n", encoding="utf-8")
+            cfg_path = base / "config.yaml"
+            cfg_path.write_text(
+                f"""
+backup:
+  root: {base / 'state'}
+git:
+  repository: {base / 'repo'}
+  mode: pull_request
+  branch: configbackup/test-host
+  push: true
+  pull_request:
+    enabled: false
+options:
+  log_level: CRITICAL
+tasks:
+  - name: one-file
+    type: file
+    source: {source}
+    destination: current/source.txt
+    storage: git
+""",
+                encoding="utf-8",
+            )
+            engine = cb.BackupEngine(cb.ConfigLoader(cfg_path).load(), dry_run=True)
+            self.assertIsNotNone(engine.git_worktree)
+            self.assertEqual(engine.git_worktree.parent, Path(tempfile.gettempdir()) / "cbwt")
+            self.assertRegex(engine.git_worktree.name, r"^[0-9a-f]{12}$")
+
+    def test_git_pull_request_worktree_root_override_uses_short_child(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            source = base / "source.txt"
+            source.write_text("snapshot\n", encoding="utf-8")
+            custom_root = base / "short-wt"
+            cfg_path = base / "config.yaml"
+            cfg_path.write_text(
+                f"""
+backup:
+  root: {base / 'state'}
+git:
+  repository: {base / 'repo'}
+  mode: pull_request
+  branch: configbackup/test-host
+  worktree_root: {custom_root}
+  push: true
+  pull_request:
+    enabled: false
+options:
+  log_level: CRITICAL
+tasks:
+  - name: one-file
+    type: file
+    source: {source}
+    destination: current/source.txt
+    storage: git
+""",
+                encoding="utf-8",
+            )
+            engine = cb.BackupEngine(cb.ConfigLoader(cfg_path).load(), dry_run=True)
+            self.assertIsNotNone(engine.git_worktree)
+            self.assertEqual(engine.git_worktree.parent, custom_root.absolute())
+            self.assertRegex(engine.git_worktree.name, r"^[0-9a-f]{12}$")
+
+    def test_windows_git_prefix_enables_longpaths(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as td:
+            cfg = {
+                "backup": {"root": td, "include_hostname": False, "hostname": "host", "deleted_directory": "_deleted"},
+                "internal": {"directory": "_configbackup", "staging_directory": "staging"},
+                "options": {"hash_algorithm": "sha256", "log_level": "CRITICAL"},
+                "logging": {"max_bytes": 100000, "backup_count": 1},
+                "variables": {},
+                "git": {},
+                "tasks": [],
+            }
+            engine = cb.BackupEngine(cfg, dry_run=True)
+            with mock.patch.object(cb.os, "name", "nt"):
+                self.assertEqual(engine._git_prefix(), ["git", "-c", "core.longpaths=true"])
+
     def test_empty_git_section_is_treated_as_empty_mapping(self):
         with tempfile.TemporaryDirectory() as td:
             cfg_path = Path(td) / "config.yaml"

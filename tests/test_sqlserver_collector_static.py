@@ -96,6 +96,26 @@ class SqlServerCollectorStaticTests(unittest.TestCase):
         self.assertIn('"/SourceConnectionString:$sourceConnectionString"', script)
         self.assertIn(r"password|pwd|user\s*id|uid|access\s*token", script)
 
+    def test_sql_credentials_support_environment_and_files(self):
+        script = (Path(__file__).resolve().parents[1] / "collectors" / "sqlserver" / "Collect-SqlServerConfiguration.ps1").read_text(encoding="utf-8")
+        self.assertIn("CONFIGBACKUP_SQL_USERNAME", script)
+        self.assertIn("CONFIGBACKUP_SQL_PASSWORD", script)
+        self.assertIn("CONFIGBACKUP_SQL_CREDENTIAL_FILE", script)
+        self.assertIn("function Resolve-SqlCredential", script)
+        self.assertIn("Import-Clixml", script)
+        self.assertIn("ConvertFrom-Json", script)
+        self.assertIn("$connectArgs.SqlCredential = $sqlCredential", script)
+        self.assertIn('"/SourceUser:$($SqlCredential.UserName)"', script)
+        self.assertIn('"/SourcePassword:$plainPassword"', script)
+        self.assertIn("AuthenticationSource  = $sqlCredentialInfo.Source", script)
+        self.assertIn("function Protect-SensitiveText", script)
+
+    def test_sql_credentials_fail_on_partial_environment_pair(self):
+        script = (Path(__file__).resolve().parents[1] / "collectors" / "sqlserver" / "Collect-SqlServerConfiguration.ps1").read_text(encoding="utf-8")
+        self.assertIn("if ($hasUsername -xor $hasPassword)", script)
+        self.assertIn("SQL environment credentials are incomplete", script)
+        self.assertIn("[switch]$DisableEnvironmentSqlCredentials", script)
+
     def test_no_trailing_comma_before_closing_parenthesis(self):
         import re
         script = (Path(__file__).resolve().parents[1] / "collectors" / "sqlserver" / "Collect-SqlServerConfiguration.ps1").read_text(encoding="utf-8")

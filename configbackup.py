@@ -37,7 +37,7 @@ except ImportError:  # pragma: no cover
     yaml = None
 
 APP_NAME = "ConfigBackup"
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.3"
 STATE_VERSION = 1
 PHASES = ["pre_run", "pre_backup", "backup", "post_backup", "post_run"]
 TASK_TYPES = {"execute", "command", "file", "directory", "glob"}
@@ -893,10 +893,14 @@ class BackupEngine:
                 if worktree_root:
                     base_worktree = Path(expand_string(worktree_root, cfg.get("variables") or {})).expanduser().absolute()
                 else:
-                    repo_tag = hashlib.sha256(str(self.git_control_repo).encode("utf-8")).hexdigest()[:12]
-                    base_worktree = self.staging_root.parent / "git-worktrees" / repo_tag
-                branch_tag = re.sub(r"[^A-Za-z0-9._-]+", "_", branch_hint).strip("._-") or "configbackup"
-                self.git_worktree = base_worktree / branch_tag
+                    # Keep the linked-worktree path intentionally short. This leaves as much
+                    # path budget as possible for repositories containing long SSIS/package
+                    # names on Windows, while remaining useful on Linux/macOS as well.
+                    base_worktree = Path(tempfile.gettempdir()) / "cbwt"
+                worktree_id = hashlib.sha256(
+                    f"{self.git_control_repo}|{branch_hint}".encode("utf-8")
+                ).hexdigest()[:12]
+                self.git_worktree = base_worktree / worktree_id
                 self.git_repo = self.git_worktree
             else:
                 self.git_repo = self.git_control_repo
@@ -1049,10 +1053,16 @@ class BackupEngine:
         except KeyError as exc:
             raise ConfigError(f"Unknown Git template placeholder {exc.args[0]!r} in {value!r}") from exc
 
+    def _git_prefix(self) -> list[str]:
+        # Git for Windows retains the legacy MAX_PATH compatibility guard unless
+        # core.longpaths is enabled. Pass it per-command so ConfigBackup works with
+        # long repository paths without changing the user's global/repository config.
+        return ["git", "-c", "core.longpaths=true"] if os.name == "nt" else ["git"]
+
     def _git_command(self, args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
         if self.git_repo is None:
             raise RuntimeError("Git repository/worktree is not configured")
-        cmd = ["git", "-C", str(self.git_repo), *args]
+        cmd = [*self._git_prefix(), "-C", str(self.git_repo), *args]
         completed = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         if check and completed.returncode != 0:
             detail = completed.stderr.strip() or completed.stdout.strip()
@@ -1063,7 +1073,7 @@ class BackupEngine:
         repo = self.git_control_repo or self.git_repo
         if repo is None:
             raise RuntimeError("Git control repository is not configured")
-        cmd = ["git", "-C", str(repo), *args]
+        cmd = [*self._git_prefix(), "-C", str(repo), *args]
         completed = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         if check and completed.returncode != 0:
             detail = completed.stderr.strip() or completed.stdout.strip()
@@ -1142,6 +1152,99 @@ class BackupEngine:
             return dict(items[0])
         return None
 
+    def _registered_git_worktrees(self) -> list[dict[str, str]]:
+        """Return Git's registered worktrees in a small machine-readable shape."""
+        result = self._git_control_command(["worktree", "list", "--porcelain"], check=False)
+        if result.returncode != 0:
+            return []
+        records: list[dict[str, str]] = []
+        current: dict[str, str] = {}
+        for raw_line in result.stdout.splitlines():
+            line = raw_line.rstrip("\r\n")
+            if not line:
+                if current:
+                    records.append(current)
+                    current = {}
+                continue
+            if " " in line:
+                key, value = line.split(" ", 1)
+                current[key] = value
+            else:
+                current[line] = "true"
+        if current:
+            records.append(current)
+        return records
+
+    def _is_configbackup_owned_worktree_path(self, path: Path) -> bool:
+        """Recognize only paths ConfigBackup is allowed to remove automatically."""
+        candidate = path.expanduser().absolute()
+        roots: list[Path] = []
+        if self.git_worktree is not None:
+            roots.append(self.git_worktree.parent.expanduser().absolute())
+        # 1.4.1+ short default and the legacy 1.4.0 staging-derived layout.
+        temp_root = Path(tempfile.gettempdir()).expanduser().absolute()
+        roots.extend([temp_root / "cbwt", temp_root / "configbackup"])
+        for root in roots:
+            try:
+                if self._is_within(candidate, root):
+                    return True
+                if self._is_within(candidate.resolve(strict=False), root.resolve(strict=False)):
+                    return True
+            except OSError:
+                continue
+        return False
+
+    def _cleanup_registered_branch_worktree(self, branch: str) -> None:
+        """Remove a stale ConfigBackup-owned worktree that still holds our branch."""
+        if self.git_control_repo is None:
+            return
+        branch_ref = f"refs/heads/{branch}"
+        # First prune registrations whose directories already disappeared.
+        self._git_control_command(["worktree", "prune"], check=False)
+        for record in self._registered_git_worktrees():
+            if record.get("branch") != branch_ref:
+                continue
+            raw_path = record.get("worktree")
+            if not raw_path:
+                continue
+            registered = Path(raw_path)
+            if self.git_worktree is not None:
+                try:
+                    if registered.resolve(strict=False) == self.git_worktree.resolve(strict=False):
+                        self._cleanup_git_worktree()
+                        continue
+                except OSError:
+                    pass
+            if not self._is_configbackup_owned_worktree_path(registered):
+                raise RuntimeError(
+                    f"ConfigBackup branch {branch!r} is checked out in non-ConfigBackup worktree {str(registered)!r}. "
+                    "Refusing to remove it automatically; remove/switch that worktree manually or choose another git.branch."
+                )
+            self.logger.warning(
+                "Removing stale ConfigBackup worktree %s holding branch %s", registered, branch
+            )
+            removed = self._git_control_command(
+                ["worktree", "remove", "--force", str(registered)], check=False
+            )
+            if removed.returncode != 0:
+                # A partially-created checkout can be hard for Git to remove. Delete only
+                # recognized ConfigBackup temp content, then prune its registration.
+                if registered.exists():
+                    shutil.rmtree(registered, ignore_errors=True)
+                self._git_control_command(["worktree", "prune", "--expire", "now"], check=False)
+            else:
+                self._git_control_command(["worktree", "prune"], check=False)
+            # Re-check: never proceed to branch -f while Git still considers it checked out.
+            remaining = [
+                r for r in self._registered_git_worktrees()
+                if r.get("branch") == branch_ref
+            ]
+            if remaining:
+                paths = ", ".join(r.get("worktree", "<unknown>") for r in remaining)
+                raise RuntimeError(
+                    f"Unable to remove stale ConfigBackup worktree for branch {branch!r}: {paths}"
+                )
+
     def _cleanup_git_worktree(self) -> None:
         if self.git_mode != "pull_request" or self.git_worktree is None or self.git_control_repo is None:
             return
@@ -1159,7 +1262,7 @@ class BackupEngine:
         if not repo.exists():
             raise ConfigError(f"git.repository must be an existing Git working tree in pull_request mode: {repo}")
         probe = subprocess.run(
-            ["git", "-C", str(repo), "rev-parse", "--is-inside-work-tree"],
+            [*self._git_prefix(), "-C", str(repo), "rev-parse", "--is-inside-work-tree"],
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
         )
         if probe.returncode != 0 or probe.stdout.strip().lower() != "true":
@@ -1198,6 +1301,7 @@ class BackupEngine:
             self.git_open_pr_url = str(open_pr.get("url") or "") or None
 
         self._cleanup_git_worktree()
+        self._cleanup_registered_branch_worktree(self.git_branch)
         self.git_worktree.parent.mkdir(parents=True, exist_ok=True)
 
         remote_branch_ref = f"refs/remotes/{remote}/{self.git_branch}"
@@ -1263,12 +1367,12 @@ class BackupEngine:
             if not self.git_cfg.get("auto_init", True):
                 raise ConfigError(f"git.repository does not exist and git.auto_init=false: {repo}")
             repo.mkdir(parents=True, exist_ok=True)
-            init = subprocess.run(["git", "init", str(repo)], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+            init = subprocess.run([*self._git_prefix(), "init", str(repo)], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
             if init.returncode != 0:
                 raise RuntimeError(init.stderr.strip() or "git init failed")
         elif not (repo / ".git").exists():
             if self.git_cfg.get("auto_init", True) and not any(repo.iterdir()):
-                init = subprocess.run(["git", "init", str(repo)], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+                init = subprocess.run([*self._git_prefix(), "init", str(repo)], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
                 if init.returncode != 0:
                     raise RuntimeError(init.stderr.strip() or "git init failed")
             else:
