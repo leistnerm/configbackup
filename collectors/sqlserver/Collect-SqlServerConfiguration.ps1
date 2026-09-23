@@ -14,7 +14,7 @@
     dbatools instance scripts by default.
 
 .NOTES
-    Collector version: 1.3.9
+    Collector version: 1.3.10
     Requires:
       - PowerShell 5.1+ (PowerShell 7+ recommended)
       - dbatools PowerShell module
@@ -73,7 +73,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$CollectorVersion = '1.3.9'
+$CollectorVersion = '1.3.10'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Write-CollectorMessage {
@@ -111,8 +111,17 @@ function Write-StableJson {
 function Write-StableCsv {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [AllowEmptyCollection()][object[]]$Rows
+        [AllowNull()][AllowEmptyCollection()][object[]]$Rows
     )
+
+    # PowerShell functions emit no pipeline object for an empty array. Callers that
+    # convert a zero-row DataTable can therefore arrive here with $null rather than
+    # @(). Treat both forms as a valid empty result and write an empty CSV artifact.
+    if ($null -eq $Rows) {
+        Write-Utf8Text -Path $Path -Text ''
+        return
+    }
+
     $rowsArray = @($Rows)
     if ($rowsArray.Count -eq 0) {
         Write-Utf8Text -Path $Path -Text ''
@@ -963,7 +972,9 @@ SELECT
             Write-CollectorMessage "SSIS metadata: $($spec.Name)"
             try {
                 $table = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'SSISDB' -Query $spec.Query
-                if ($null -ne $table) {
+                $rowCount = if ($null -eq $table) { 0 } else { $table.Rows.Count }
+                Write-CollectorMessage "SSIS metadata: $($spec.Name) -> $rowCount row(s)"
+                if ($rowCount -gt 0) {
                     Write-StableCsv -Path (Join-Path $TargetDirectory $spec.File) -Rows (Convert-DataTableRows $table)
                 }
                 else {
