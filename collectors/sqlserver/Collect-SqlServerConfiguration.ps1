@@ -14,7 +14,7 @@
     dbatools instance scripts by default.
 
 .NOTES
-    Collector version: 1.3.10
+    Collector version: 1.3.11
     Requires:
       - PowerShell 5.1+ (PowerShell 7+ recommended)
       - dbatools PowerShell module
@@ -37,6 +37,11 @@ param(
     [switch]$IncludeTempdb,
 
     [string]$SqlPackagePath = 'sqlpackage',
+
+    # SqlPackage schema-model verification is intentionally opt-in. Extraction can
+    # succeed for source-control/history purposes even when model verification finds
+    # unresolved external references.
+    [switch]$VerifySchemaExtraction,
 
     [switch]$SkipSchema,
     [switch]$SkipInstanceExport,
@@ -73,7 +78,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$CollectorVersion = '1.3.10'
+$CollectorVersion = '1.3.11'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Write-CollectorMessage {
@@ -305,31 +310,57 @@ function Invoke-SqlPackageExtract {
         [Parameter(Mandatory = $true)][string]$DatabaseName,
         [Parameter(Mandatory = $true)][string]$TargetDirectory,
         [int]$TimeoutSeconds,
-        [switch]$TrustCertificate
+        [switch]$TrustCertificate,
+        [switch]$VerifyExtraction
     )
 
     [System.IO.Directory]::CreateDirectory($TargetDirectory) | Out-Null
+
+    $diagnosticsFile = Join-Path ([System.IO.Path]::GetTempPath()) ("configbackup-sqlpackage-" + [guid]::NewGuid().ToString('N') + '.log')
+    $verifyValue = if ($VerifyExtraction) { 'True' } else { 'False' }
+    $trustValue = if ($TrustCertificate) { 'True' } else { 'False' }
 
     $arguments = @(
         '/Action:Extract',
         "/SourceServerName:$ServerName",
         "/SourceDatabaseName:$DatabaseName",
         "/SourceTimeout:$TimeoutSeconds",
+        '/SourceEncryptConnection:True',
+        "/SourceTrustServerCertificate:$trustValue",
         "/TargetFile:$TargetDirectory",
         '/p:ExtractTarget=SchemaObjectType',
         '/p:ExtractAllTableData=False',
-        '/p:VerifyExtraction=True',
+        "/p:VerifyExtraction=$verifyValue",
+        "/DiagnosticsFile:$diagnosticsFile",
+        '/DiagnosticsLevel:Error',
         '/Quiet:True'
     )
-    if ($TrustCertificate) {
-        $arguments += '/SourceTrustServerCertificate:True'
-    }
 
-    Write-CollectorMessage "Extracting schema: $DatabaseName"
-    & $Executable @arguments
-    $exitCode = $LASTEXITCODE
-    if ($exitCode -ne 0) {
-        throw "SqlPackage failed for database '$DatabaseName' with exit code $exitCode."
+    Write-CollectorMessage "Extracting schema: $DatabaseName (verify=$verifyValue trust_server_certificate=$trustValue)"
+    try {
+        $consoleOutput = @(& $Executable @arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) {
+            Write-CollectorError "SqlPackage failed for database '$DatabaseName' with exit code $exitCode."
+            foreach ($line in $consoleOutput) {
+                if ($null -ne $line -and -not [string]::IsNullOrWhiteSpace([string]$line)) {
+                    Write-CollectorError ("SqlPackage console: " + [string]$line)
+                }
+            }
+            if (Test-Path -LiteralPath $diagnosticsFile) {
+                $diagnosticLines = @(Get-Content -LiteralPath $diagnosticsFile -ErrorAction SilentlyContinue)
+                if ($diagnosticLines.Count -gt 0) {
+                    Write-CollectorError 'SqlPackage diagnostics:'
+                    foreach ($line in @($diagnosticLines | Select-Object -Last 200)) {
+                        Write-CollectorError ("SqlPackage diagnostic: " + [string]$line)
+                    }
+                }
+            }
+            throw "SqlPackage failed for database '$DatabaseName' with exit code $exitCode."
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $diagnosticsFile -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -1172,6 +1203,7 @@ try {
         DbatoolsVersion       = if ($null -ne $loadedDbatools) { $loadedDbatools.Version.ToString() } else { $null }
         SqlPackageVersion     = $sqlPackageVersion
         SchemaExtraction      = (-not $SkipSchema)
+        VerifySchemaExtraction = [bool]$VerifySchemaExtraction
         InstanceExport        = (-not $SkipInstanceExport)
         Inventory             = (-not $SkipInventory)
         PasswordMaterial      = 'excluded'
@@ -1280,6 +1312,7 @@ try {
                 TargetDirectory = (Join-Path $dbDirectory 'schema')
                 TimeoutSeconds  = $ConnectTimeout
                 TrustCertificate = [bool]$TrustServerCertificate
+                VerifyExtraction = [bool]$VerifySchemaExtraction
             }
             Invoke-SqlPackageExtract @extractArgs
         }
