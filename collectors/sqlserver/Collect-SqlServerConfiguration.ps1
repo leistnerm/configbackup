@@ -14,7 +14,7 @@
     dbatools instance scripts by default.
 
 .NOTES
-    Collector version: 1.3.4
+    Collector version: 1.3.5
     Requires:
       - PowerShell 5.1+ (PowerShell 7+ recommended)
       - dbatools PowerShell module
@@ -45,6 +45,7 @@ param(
     [switch]$SkipSsis,
     [switch]$SkipIspac,
     [switch]$IncludeLegacySsis,
+    [switch]$AllowPartialSsis,
 
     # Additional Export-DbaInstance categories to skip. "Databases", "AgentServer",
     # and "AvailabilityGroups" are always excluded from the broad export because this
@@ -62,7 +63,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$CollectorVersion = '1.3.4'
+$CollectorVersion = '1.3.5'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Write-CollectorMessage {
@@ -614,75 +615,171 @@ function Export-SsisConfiguration {
         [Parameter(Mandatory = $true)]$ServerObject,
         [Parameter(Mandatory = $true)][string]$TargetDirectory,
         [switch]$SkipIspacFiles,
-        [switch]$IncludeLegacy
+        [switch]$IncludeLegacy,
+        [switch]$AllowPartial
     )
+
     if ($null -eq $ServerObject.Databases['SSISDB']) {
         Write-CollectorMessage 'SSISDB is not present; skipping project-deployment SSIS collection'
     }
     else {
         Write-CollectorMessage 'Collecting SSISDB projects, packages, parameters, environments, and references'
         [System.IO.Directory]::CreateDirectory($TargetDirectory) | Out-Null
-        $queries = [ordered]@{
-            'catalog-properties.csv' = 'SELECT property_name, property_value FROM catalog.catalog_properties ORDER BY property_name;'
-            'folders.csv' = 'SELECT id AS folder_id,name,description,created_by_name,created_time FROM catalog.folders ORDER BY name;'
-            'projects.csv' = 'SELECT project_id,folder_id,name,description,project_format_version,deployed_by_name,last_deployed_time,created_time,object_version_lsn FROM catalog.projects ORDER BY folder_id,name;'
-            'packages.csv' = 'SELECT p.package_id,p.project_id,p.name,p.package_guid,p.description,p.package_format_version,p.version_major,p.version_minor,p.version_build,p.version_comments FROM catalog.packages p ORDER BY p.project_id,p.name;'
-            'environment-references.csv' = 'SELECT reference_id,project_id,reference_type,environment_folder_name,environment_name FROM catalog.environment_references ORDER BY project_id,reference_id;'
-            'environments.csv' = 'SELECT environment_id,folder_id,name,description,created_by_name,created_time FROM catalog.environments ORDER BY folder_id,name;'
-            'environment-variables.csv' = "SELECT environment_id,name,description,type,sensitive,CASE WHEN sensitive=1 THEN N'<REDACTED>' ELSE CONVERT(nvarchar(max),value) END AS value FROM catalog.environment_variables ORDER BY environment_id,name;"
-            'object-parameters.csv' = "SELECT project_id,object_type,object_name,parameter_name,data_type,required,sensitive,description,CASE WHEN sensitive=1 THEN N'<REDACTED>' ELSE CONVERT(nvarchar(max),design_default_value) END AS design_default_value,CASE WHEN sensitive=1 THEN N'<REDACTED>' ELSE CONVERT(nvarchar(max),default_value) END AS default_value,value_type,value_set,referenced_variable_name FROM catalog.object_parameters ORDER BY project_id,object_type,object_name,parameter_name;"
-            'explicit-object-permissions.csv' = 'SELECT e.object_type,e.object_id,e.principal_id,p.name AS principal_name,p.type_desc AS principal_type,e.permission_type,e.is_deny,e.grantor_id,g.name AS grantor_name FROM catalog.explicit_object_permissions e LEFT JOIN sys.database_principals p ON e.principal_id=p.principal_id LEFT JOIN sys.database_principals g ON e.grantor_id=g.principal_id ORDER BY e.object_type,e.object_id,p.name,e.permission_type;'
-            'database-role-memberships.csv' = 'SELECT rp.name AS role_name,mp.name AS member_name,mp.type_desc AS member_type FROM sys.database_role_members drm JOIN sys.database_principals rp ON drm.role_principal_id=rp.principal_id JOIN sys.database_principals mp ON drm.member_principal_id=mp.principal_id ORDER BY rp.name,mp.name;'
+
+        # SSISDB catalog views enforce row-level security. A complete, deletion-safe
+        # snapshot can only be guaranteed for sysadmin or SSISDB ssis_admin. Do a
+        # preflight before writing the tree so permission problems are explicit.
+        Write-CollectorMessage 'SSISDB preflight: checking database status and access'
+        $accessTable = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'master' -Query @'
+SELECT
+    CAST(DATABASEPROPERTYEX(N'SSISDB', N'Status') AS nvarchar(128)) AS database_status,
+    HAS_DBACCESS(N'SSISDB') AS has_db_access;
+'@
+        if ($null -eq $accessTable -or $accessTable.Rows.Count -eq 0) {
+            throw 'SSISDB preflight returned no database status row.'
         }
-        foreach ($entry in $queries.GetEnumerator()) {
-            $table = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'SSISDB' -Query $entry.Value
-            if ($null -ne $table) {
-                Write-StableCsv -Path (Join-Path $TargetDirectory $entry.Key) -Rows (Convert-DataTableRows $table)
+        $databaseStatus = [string]$accessTable.Rows[0]['database_status']
+        $hasDbAccess = 0
+        if ($accessTable.Rows[0]['has_db_access'] -isnot [System.DBNull]) {
+            $hasDbAccess = [int]$accessTable.Rows[0]['has_db_access']
+        }
+        if ($databaseStatus -ne 'ONLINE') {
+            throw "SSISDB exists but is not ONLINE (status: $databaseStatus)."
+        }
+        if ($hasDbAccess -ne 1) {
+            throw 'SSISDB exists but the current SQL principal does not have database access.'
+        }
+
+        $roleTable = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'SSISDB' -Query @'
+SELECT
+    IS_SRVROLEMEMBER(N'sysadmin') AS is_sysadmin,
+    IS_ROLEMEMBER(N'ssis_admin') AS is_ssis_admin;
+'@
+        $isSysadmin = 0
+        $isSsisAdmin = 0
+        if ($null -ne $roleTable -and $roleTable.Rows.Count -gt 0) {
+            if ($roleTable.Rows[0]['is_sysadmin'] -isnot [System.DBNull] -and $null -ne $roleTable.Rows[0]['is_sysadmin']) {
+                $isSysadmin = [int]$roleTable.Rows[0]['is_sysadmin']
+            }
+            if ($roleTable.Rows[0]['is_ssis_admin'] -isnot [System.DBNull] -and $null -ne $roleTable.Rows[0]['is_ssis_admin']) {
+                $isSsisAdmin = [int]$roleTable.Rows[0]['is_ssis_admin']
+            }
+        }
+        $fullCatalogAccess = ($isSysadmin -eq 1 -or $isSsisAdmin -eq 1)
+        Write-StableJson -Path (Join-Path $TargetDirectory 'access.json') -Value ([ordered]@{
+            DatabaseStatus = $databaseStatus
+            HasDatabaseAccess = ($hasDbAccess -eq 1)
+            IsSysadmin = ($isSysadmin -eq 1)
+            IsSsisAdmin = ($isSsisAdmin -eq 1)
+            FullCatalogVisibility = $fullCatalogAccess
+            PartialMode = [bool]$AllowPartial
+        })
+
+        if (-not $fullCatalogAccess -and -not $AllowPartial) {
+            throw 'SSISDB is accessible, but the current principal is neither sysadmin nor a member of SSISDB role ssis_admin. A complete SSIS snapshot cannot be guaranteed because SSIS catalog views use row-level security. Grant appropriate SSISDB access, use -SkipSsis, or explicitly use -AllowPartialSsis if a visibility-limited snapshot is acceptable.'
+        }
+        if (-not $fullCatalogAccess -and $AllowPartial) {
+            Write-CollectorMessage 'WARNING: SSIS partial mode is enabled; only objects visible to the current principal will be collected. Permission changes can look like deletions.'
+        }
+
+        $querySpecs = @(
+            [pscustomobject]@{ Name='catalog-properties'; File='catalog-properties.csv'; RequiresFull=$true; Query='SELECT property_name, property_value FROM catalog.catalog_properties ORDER BY property_name;' },
+            [pscustomobject]@{ Name='folders'; File='folders.csv'; RequiresFull=$false; Query='SELECT id AS folder_id,name,description,created_by_name,created_time FROM catalog.folders ORDER BY name;' },
+            [pscustomobject]@{ Name='projects'; File='projects.csv'; RequiresFull=$false; Query='SELECT project_id,folder_id,name,description,project_format_version,deployed_by_name,last_deployed_time,created_time,object_version_lsn FROM catalog.projects ORDER BY folder_id,name;' },
+            [pscustomobject]@{ Name='packages'; File='packages.csv'; RequiresFull=$false; Query='SELECT p.package_id,p.project_id,p.name,p.package_guid,p.description,p.package_format_version,p.version_major,p.version_minor,p.version_build,p.version_comments FROM catalog.packages p ORDER BY p.project_id,p.name;' },
+            [pscustomobject]@{ Name='environment-references'; File='environment-references.csv'; RequiresFull=$false; Query='SELECT reference_id,project_id,reference_type,environment_folder_name,environment_name FROM catalog.environment_references ORDER BY project_id,reference_id;' },
+            [pscustomobject]@{ Name='environments'; File='environments.csv'; RequiresFull=$false; Query='SELECT environment_id,folder_id,name,description,created_by_name,created_time FROM catalog.environments ORDER BY folder_id,name;' },
+            [pscustomobject]@{ Name='environment-variables'; File='environment-variables.csv'; RequiresFull=$false; Query="SELECT environment_id,name,description,type,sensitive,CASE WHEN sensitive=1 THEN N'<REDACTED>' ELSE CONVERT(nvarchar(max),value) END AS value FROM catalog.environment_variables ORDER BY environment_id,name;" },
+            [pscustomobject]@{ Name='object-parameters'; File='object-parameters.csv'; RequiresFull=$false; Query="SELECT project_id,object_type,object_name,parameter_name,data_type,required,sensitive,description,CASE WHEN sensitive=1 THEN N'<REDACTED>' ELSE CONVERT(nvarchar(max),design_default_value) END AS design_default_value,CASE WHEN sensitive=1 THEN N'<REDACTED>' ELSE CONVERT(nvarchar(max),default_value) END AS default_value,value_type,value_set,referenced_variable_name FROM catalog.object_parameters ORDER BY project_id,object_type,object_name,parameter_name;" },
+            [pscustomobject]@{ Name='explicit-object-permissions'; File='explicit-object-permissions.csv'; RequiresFull=$false; Query='SELECT e.object_type,e.object_id,e.principal_id,p.name AS principal_name,p.type_desc AS principal_type,e.permission_type,e.is_deny,e.grantor_id,g.name AS grantor_name FROM catalog.explicit_object_permissions e LEFT JOIN sys.database_principals p ON e.principal_id=p.principal_id LEFT JOIN sys.database_principals g ON e.grantor_id=g.principal_id ORDER BY e.object_type,e.object_id,p.name,e.permission_type;' },
+            [pscustomobject]@{ Name='database-role-memberships'; File='database-role-memberships.csv'; RequiresFull=$false; Query='SELECT rp.name AS role_name,mp.name AS member_name,mp.type_desc AS member_type FROM sys.database_role_members drm JOIN sys.database_principals rp ON drm.role_principal_id=rp.principal_id JOIN sys.database_principals mp ON drm.member_principal_id=mp.principal_id ORDER BY rp.name,mp.name;' }
+        )
+
+        foreach ($spec in $querySpecs) {
+            if ($spec.RequiresFull -and -not $fullCatalogAccess) {
+                Write-CollectorMessage "SSIS metadata: skipping $($spec.Name) because full SSIS catalog visibility is unavailable"
+                continue
+            }
+            Write-CollectorMessage "SSIS metadata: $($spec.Name)"
+            try {
+                $table = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'SSISDB' -Query $spec.Query
+                if ($null -ne $table) {
+                    Write-StableCsv -Path (Join-Path $TargetDirectory $spec.File) -Rows (Convert-DataTableRows $table)
+                }
+                else {
+                    Write-StableCsv -Path (Join-Path $TargetDirectory $spec.File) -Rows @()
+                }
+            }
+            catch {
+                throw "SSIS metadata query '$($spec.Name)' failed: $($_.Exception.Message)"
             }
         }
 
-        $projectTable = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'SSISDB' -Query @'
+        Write-CollectorMessage 'SSIS projects: discovering visible deployed projects'
+        try {
+            $projectTable = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'SSISDB' -Query @'
 SELECT p.project_id,p.name AS project_name,f.name AS folder_name
-FROM catalog.projects p JOIN catalog.folders f ON p.folder_id=f.folder_id
+FROM catalog.projects p JOIN catalog.folders f ON p.folder_id=f.id
 ORDER BY f.name,p.name;
 '@
-        foreach ($row in @($projectTable.Rows)) {
+        }
+        catch {
+            throw "SSIS project discovery failed: $($_.Exception.Message)"
+        }
+
+        $projectRows = if ($null -eq $projectTable) { @() } else { @($projectTable.Rows) }
+        Write-CollectorMessage "SSIS projects: $($projectRows.Count) visible project(s)"
+        foreach ($row in $projectRows) {
             $folderName = [string]$row['folder_name']
             $projectName = [string]$row['project_name']
-            $folderDir = Get-SafePathSegment -Value $folderName
-            $projectDir = Get-SafePathSegment -Value $projectName
-            $targetProject = Join-Path (Join-Path (Join-Path $TargetDirectory 'projects') $folderDir) $projectDir
-            [System.IO.Directory]::CreateDirectory($targetProject) | Out-Null
-            $folderLit = Get-SqlLiteral $folderName
-            $projectLit = Get-SqlLiteral $projectName
-            $streamTable = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'SSISDB' -Query "EXEC catalog.get_project @folder_name=$folderLit, @project_name=$projectLit;"
-            if ($null -eq $streamTable -or $streamTable.Rows.Count -eq 0) { throw "SSISDB returned no project stream for $folderName/$projectName" }
-            $projectBytes = $streamTable.Rows[0][0]
-            if ($projectBytes -isnot [byte[]]) { throw "Unexpected SSIS project stream type for $folderName/$projectName" }
-            $tempIspac = Join-Path ([System.IO.Path]::GetTempPath()) ("configbackup-" + [guid]::NewGuid().ToString('N') + '.ispac')
-            [System.IO.File]::WriteAllBytes($tempIspac, $projectBytes)
+            Write-CollectorMessage "SSIS project export: $folderName/$projectName"
             try {
-                if (-not $SkipIspacFiles) {
-                    Copy-Item -LiteralPath $tempIspac -Destination (Join-Path $targetProject ($projectDir + '.ispac')) -Force
+                $folderDir = Get-SafePathSegment -Value $folderName
+                $projectDir = Get-SafePathSegment -Value $projectName
+                $targetProject = Join-Path (Join-Path (Join-Path $TargetDirectory 'projects') $folderDir) $projectDir
+                [System.IO.Directory]::CreateDirectory($targetProject) | Out-Null
+                $folderLit = Get-SqlLiteral $folderName
+                $projectLit = Get-SqlLiteral $projectName
+                $streamTable = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'SSISDB' -Query "EXEC catalog.get_project @folder_name=$folderLit, @project_name=$projectLit;"
+                if ($null -eq $streamTable -or $streamTable.Rows.Count -eq 0) { throw 'catalog.get_project returned no project stream' }
+                $projectBytes = $streamTable.Rows[0][0]
+                if ($null -eq $projectBytes) { throw 'catalog.get_project returned a null project stream' }
+                if ($projectBytes -isnot [byte[]]) { throw "catalog.get_project returned unexpected stream type '$($projectBytes.GetType().FullName)'" }
+                $tempIspac = Join-Path ([System.IO.Path]::GetTempPath()) ("configbackup-" + [guid]::NewGuid().ToString('N') + '.ispac')
+                [System.IO.File]::WriteAllBytes($tempIspac, $projectBytes)
+                try {
+                    if (-not $SkipIspacFiles) {
+                        Copy-Item -LiteralPath $tempIspac -Destination (Join-Path $targetProject ($projectDir + '.ispac')) -Force
+                    }
+                    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+                    $expanded = Join-Path $targetProject 'expanded'
+                    if (Test-Path -LiteralPath $expanded) { Remove-Item -LiteralPath $expanded -Recurse -Force }
+                    [System.IO.Compression.ZipFile]::ExtractToDirectory($tempIspac, $expanded)
                 }
-                Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
-                $expanded = Join-Path $targetProject 'expanded'
-                if (Test-Path -LiteralPath $expanded) { Remove-Item -LiteralPath $expanded -Recurse -Force }
-                [System.IO.Compression.ZipFile]::ExtractToDirectory($tempIspac, $expanded)
+                finally {
+                    Remove-Item -LiteralPath $tempIspac -Force -ErrorAction SilentlyContinue
+                }
             }
-            finally {
-                Remove-Item -LiteralPath $tempIspac -Force -ErrorAction SilentlyContinue
+            catch {
+                throw "SSIS project export failed for '$folderName/$projectName': $($_.Exception.Message)"
             }
         }
+        Write-CollectorMessage 'SSISDB project-deployment collection completed'
     }
 
     if ($IncludeLegacy) {
         Write-CollectorMessage 'Collecting legacy MSDB SSIS package metadata and package data'
         $legacyDir = Join-Path $TargetDirectory 'legacy-msdb'
         [System.IO.Directory]::CreateDirectory($legacyDir) | Out-Null
-        $legacy = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'msdb' -Query 'SELECT id,name,description,folderid,ownersid,packagedata,packageformat FROM dbo.sysssispackages ORDER BY name,id;'
+        try {
+            $legacy = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'msdb' -Query 'SELECT id,name,description,folderid,ownersid,packagedata,packageformat FROM dbo.sysssispackages ORDER BY name,id;'
+        }
+        catch {
+            throw "Legacy MSDB SSIS package query failed: $($_.Exception.Message)"
+        }
         $metadata = @()
-        foreach ($row in @($legacy.Rows)) {
+        $legacyRows = if ($null -eq $legacy) { @() } else { @($legacy.Rows) }
+        foreach ($row in $legacyRows) {
             $name = [string]$row['name']
             $id = [string]$row['id']
             $safe = (Get-SafePathSegment -Value $name) + '__' + (Get-ShortHash -Value $id)
@@ -695,6 +792,7 @@ ORDER BY f.name,p.name;
             }
         }
         Write-StableCsv -Path (Join-Path $legacyDir 'packages.csv') -Rows $metadata
+        Write-CollectorMessage "Legacy SSIS: $($legacyRows.Count) package(s) collected"
     }
 }
 
@@ -810,6 +908,7 @@ try {
         Ssis                   = (-not $SkipSsis)
         IspacFiles             = (-not $SkipIspac)
         LegacySsis             = [bool]$IncludeLegacySsis
+        SsisPartialMode         = [bool]$AllowPartialSsis
     }
     Write-StableJson -Path (Join-Path $OutputDirectory 'collector.json') -Value $collectorInfo
 
@@ -855,7 +954,7 @@ try {
     }
 
     if (-not $SkipSsis) {
-        Export-SsisConfiguration -ServerObject $server -TargetDirectory (Join-Path $instanceDirectory 'ssis') -SkipIspacFiles:$SkipIspac -IncludeLegacy:$IncludeLegacySsis
+        Export-SsisConfiguration -ServerObject $server -TargetDirectory (Join-Path $instanceDirectory 'ssis') -SkipIspacFiles:$SkipIspac -IncludeLegacy:$IncludeLegacySsis -AllowPartial:$AllowPartialSsis
     }
 
     foreach ($db in $databases) {
