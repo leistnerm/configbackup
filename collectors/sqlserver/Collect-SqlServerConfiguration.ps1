@@ -14,7 +14,7 @@
     dbatools instance scripts by default.
 
 .NOTES
-    Collector version: 1.3.1
+    Collector version: 1.3.2
     Requires:
       - PowerShell 5.1+ (PowerShell 7+ recommended)
       - dbatools PowerShell module
@@ -46,8 +46,9 @@ param(
     [switch]$SkipIspac,
     [switch]$IncludeLegacySsis,
 
-    # Additional Export-DbaInstance categories to skip. "Databases" is always
-    # excluded because this collector inventories/extracts databases separately.
+    # Additional Export-DbaInstance categories to skip. "Databases" and "AgentServer"
+    # are always excluded because this collector inventories/extracts databases and
+    # SQL Agent separately.
     [string[]]$InstanceExclude = @(),
 
     [switch]$TrustServerCertificate,
@@ -60,7 +61,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$CollectorVersion = '1.3.1'
+$CollectorVersion = '1.3.2'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Write-CollectorMessage {
@@ -323,20 +324,46 @@ function Export-InstanceConfiguration {
     [System.IO.Directory]::CreateDirectory($tempRoot) | Out-Null
 
     try {
-        $excludes = @('Databases') + @(Expand-NameList $AdditionalExcludes)
+        # Databases are handled by the inventory/SqlPackage path below. SQL Agent is
+        # exported separately by Export-SqlAgentConfiguration, which gives us a more
+        # granular and diff-friendly layout. Keeping both out of Export-DbaInstance
+        # also avoids duplicating those objects and reduces the surface area of this
+        # broad dbatools export.
+        $excludes = @('Databases', 'AgentServer') + @(Expand-NameList $AdditionalExcludes)
         $excludes = @($excludes | Select-Object -Unique)
 
         Write-CollectorMessage 'Exporting SQL Server instance configuration with dbatools'
+        Write-CollectorMessage ("dbatools instance export excludes: {0}" -f ($excludes -join ', '))
         $exportArgs = @{
-            SqlInstance    = $ServerObject
-            Path           = $tempRoot
-            Force          = $true
-            NoPrefix       = $true
+            SqlInstance     = $ServerObject
+            Path            = $tempRoot
+            Force           = $true
+            NoPrefix        = $true
             ExcludePassword = $true
-            Exclude        = $excludes
+            Exclude         = $excludes
             EnableException = $true
+            Verbose         = $true
         }
-        $files = @(Export-DbaInstance @exportArgs)
+
+        try {
+            $files = @(Export-DbaInstance @exportArgs)
+        }
+        catch {
+            Write-CollectorError ("Export-DbaInstance failed: {0}" -f $_.Exception.Message)
+            if ($null -ne $_.CategoryInfo) {
+                Write-CollectorError ("Category: {0}" -f $_.CategoryInfo.ToString())
+            }
+            if (-not [string]::IsNullOrWhiteSpace($_.FullyQualifiedErrorId)) {
+                Write-CollectorError ("FullyQualifiedErrorId: {0}" -f $_.FullyQualifiedErrorId)
+            }
+            if ($null -ne $_.InvocationInfo -and -not [string]::IsNullOrWhiteSpace($_.InvocationInfo.PositionMessage)) {
+                Write-CollectorError $_.InvocationInfo.PositionMessage.Trim()
+            }
+            if (-not [string]::IsNullOrWhiteSpace($_.ScriptStackTrace)) {
+                Write-CollectorError $_.ScriptStackTrace
+            }
+            throw
+        }
 
         $fileInfos = @($files | Where-Object { $_ -is [System.IO.FileInfo] -and $_.Exists } | Sort-Object Name, FullName)
         foreach ($file in $fileInfos) {
