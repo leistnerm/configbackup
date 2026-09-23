@@ -151,7 +151,7 @@ See `docs/commands-and-collectors.md`. For SQL Server, see `docs/sql-server-coll
 
 ## Git-backed history
 
-A task can use `storage: git` or `storage: both`. For an existing/shared repository, 1.4.0 adds `git.mode: pull_request`, which uses an isolated linked worktree and automation branch instead of touching the normal checkout:
+A task can use `storage: git` or `storage: both`. For an existing/shared repository, `git.mode: pull_request`, which uses an isolated linked worktree and automation branch instead of touching the normal checkout:
 
 ```yaml
 git:

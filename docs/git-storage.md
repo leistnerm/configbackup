@@ -63,6 +63,44 @@ In this mode ConfigBackup does **not** switch branches or stage files in the rep
 
 Git linked worktrees have their own working tree and index, so unrelated staged or unstaged work in the normal checkout is not touched.
 
+### Stale ConfigBackup worktrees
+
+If a process is interrupted while a linked worktree is being created or removed, Git can retain a registration that keeps the automation branch checked out. ConfigBackup automatically prunes missing worktrees and removes stale worktrees only when their paths are under a recognized ConfigBackup temporary worktree root. This includes both the current `${TEMP}/cbwt/<short-id>` layout and the older 1.4.0 `${TEMP}/configbackup/.../git-worktrees/...` layout.
+
+ConfigBackup will **not** automatically remove a worktree at an unrelated path. If the configured automation branch is intentionally checked out elsewhere, switch/remove that worktree manually or choose a different `git.branch`.
+
+Manual inspection/recovery commands remain available:
+
+```bash
+git -C /path/to/repository worktree list
+git -C /path/to/repository worktree prune -v
+```
+
+### Worktree location and Windows long paths
+
+By default ConfigBackup keeps the temporary linked worktree path intentionally short:
+
+```text
+<TEMP>/cbwt/<short-id>
+```
+
+On Windows this is typically similar to:
+
+```text
+%TEMP%\cbwt\a1b2c3d4e5f6
+```
+
+The short ID is stable for the repository + automation branch. This preserves path-length budget for repositories containing long SSIS/package/object names. ConfigBackup also invokes Git with `core.longpaths=true` on Windows for its own commands; it does not need to modify the user's global Git configuration.
+
+Override the base directory when desired:
+
+```yaml
+git:
+  worktree_root: 'C:\cbwt'
+```
+
+The actual worktree will be created beneath that root using the same short ID, for example `C:\cbwt\a1b2c3d4e5f6`. The directory is temporary and is removed/pruned after the run.
+
 If a prior ConfigBackup PR was merged/closed, a subsequent run starts the automation branch again from the current remote base branch. If an open PR exists, later ConfigBackup commits are pushed to the same branch and therefore update that PR.
 
 ### Base branch selection

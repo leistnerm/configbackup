@@ -43,6 +43,8 @@ git:
   push: true
   include_hostname: true
   path_prefix: configbackup
+  # Optional. Defaults to <TEMP>/cbwt; a short ID is appended automatically.
+  # worktree_root: 'C:\\cbwt'
   ignore:
     - '**/*.ispac'
   author_name: ConfigBackup
@@ -59,6 +61,8 @@ git:
 ```
 
 `mode: pull_request` uses a temporary linked Git worktree and an automation branch, so the repository's normal checkout may contain unrelated staged or unstaged user work without ConfigBackup modifying or committing it. `base_branch: auto` follows the configured remote's default branch. Built-in PR creation currently uses the GitHub CLI (`gh`); set `pull_request.enabled: false` if another scheduled process will create the PR.
+
+`git.worktree_root` is optional. When omitted, pull-request mode uses `<TEMP>/cbwt/<short-id>`. If specified (for example `C:\cbwt`), ConfigBackup creates the short per-repository/branch worktree directory beneath that root. On Windows ConfigBackup passes `core.longpaths=true` to its own Git commands.
 
 `git.ignore` is a list of Git-only glob exclusions relative to the ConfigBackup snapshot root. ConfigBackup writes a managed block into a `.gitignore` under that root. Ignored files are still retained by the filesystem side of `storage: both`. This is particularly useful for `**/*.ispac`. Negation patterns are not supported.
 

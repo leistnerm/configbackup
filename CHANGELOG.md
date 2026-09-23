@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.4.3 - 2026-09-23
+
+- Added SQL Server authentication from `CONFIGBACKUP_SQL_USERNAME` / `CONFIGBACKUP_SQL_PASSWORD` without storing secrets in YAML.
+- Added customizable SQL username/password environment-variable names.
+- Added `-SqlCredentialFile` and `CONFIGBACKUP_SQL_CREDENTIAL_FILE` support. Windows CLIXML/PSCredential files and JSON credential files are supported.
+- SQL credentials are passed to dbatools as `PSCredential` and to SqlPackage using SQL-auth source parameters.
+- Credential source is recorded (`integrated`, `environment`, or credential-file type) without recording the password.
+- Added diagnostic redaction for SQL password material.
+
+## 1.4.2 - 2026-09-23
+
+- Pull-request mode now detects a stale registered worktree that still has the ConfigBackup automation branch checked out and removes it before resetting/reusing the branch.
+- Automatic stale-worktree cleanup is safety-scoped to recognized ConfigBackup worktree roots: the current configured/default worktree root, `${TEMP}/cbwt`, and the legacy 1.4.0 `${TEMP}/configbackup/.../git-worktrees/...` layout.
+- If the automation branch is checked out in an unrelated/user-owned worktree, ConfigBackup refuses to remove it and reports the path instead.
+- Added regression coverage for upgrading from the legacy 1.4.0 worktree layout to the short 1.4.1+ layout.
+
+## 1.4.1 - 2026-09-23
+
+- Shortened pull-request-mode Git worktree paths. The default is now `${TEMP}/cbwt/<short-id>` (for example `%TEMP%\cbwt\a1b2c3d4e5f6` on Windows) instead of nesting worktrees under ConfigBackup staging paths.
+- Added/retained `git.worktree_root` as an explicit override; ConfigBackup creates the short per-repository/branch worktree ID beneath that root (for example `C:\cbwt\a1b2c3d4e5f6`).
+- On Windows, ConfigBackup passes `-c core.longpaths=true` to its Git commands so long-path checkout support does not depend on global Git configuration.
+- Added regression coverage for default/overridden worktree roots and Windows Git long-path command construction.
+
 ## 1.4.0 - 2026-09-23
 
 - Added `git.mode: pull_request` for safely using an existing/shared repository without switching or modifying the user's normal checkout.
