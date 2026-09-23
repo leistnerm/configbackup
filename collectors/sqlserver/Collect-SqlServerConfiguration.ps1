@@ -14,7 +14,7 @@
     dbatools instance scripts by default.
 
 .NOTES
-    Collector version: 1.3.7
+    Collector version: 1.3.8
     Requires:
       - PowerShell 5.1+ (PowerShell 7+ recommended)
       - dbatools PowerShell module
@@ -73,7 +73,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$CollectorVersion = '1.3.7'
+$CollectorVersion = '1.3.8'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Write-CollectorMessage {
@@ -702,8 +702,20 @@ function Invoke-QueryTable {
         [Parameter(Mandatory = $true)][string]$DatabaseName,
         [Parameter(Mandatory = $true)][string]$Query
     )
-    $safeDb = $DatabaseName.Replace(']', ']]')
-    $ds = $ServerObject.ConnectionContext.ExecuteWithResults("USE [$safeDb];`n$Query")
+
+    # Use dbatools' supported query execution path rather than calling SMO
+    # SMO ExecuteWithResults directly.  Some environments can query
+    # SSISDB successfully through Invoke-DbaQuery while the reused SMO connection
+    # fails when changing database context.  -As DataSet preserves the DataTable
+    # shape expected by the rest of this collector, including varbinary(max)
+    # project streams returned by SSISDB catalog.get_project.
+    $ds = Invoke-DbaQuery `
+        -SqlInstance $ServerObject `
+        -Database $DatabaseName `
+        -Query $Query `
+        -As DataSet `
+        -EnableException
+
     if ($null -eq $ds -or $ds.Tables.Count -eq 0) { return $null }
     return $ds.Tables[0]
 }
