@@ -14,7 +14,7 @@
     dbatools instance scripts by default.
 
 .NOTES
-    Collector version: 1.3.11
+    Collector version: 1.3.12
     Requires:
       - PowerShell 5.1+ (PowerShell 7+ recommended)
       - dbatools PowerShell module
@@ -78,7 +78,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$CollectorVersion = '1.3.11'
+$CollectorVersion = '1.3.12'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Write-CollectorMessage {
@@ -333,18 +333,50 @@ function Invoke-SqlPackageExtract {
         "/p:VerifyExtraction=$verifyValue",
         "/DiagnosticsFile:$diagnosticsFile",
         '/DiagnosticsLevel:Error',
-        '/Quiet:True'
     )
 
     Write-CollectorMessage "Extracting schema: $DatabaseName (verify=$verifyValue trust_server_certificate=$trustValue)"
     try {
-        $consoleOutput = @(& $Executable @arguments 2>&1)
-        $exitCode = $LASTEXITCODE
+        # Launch SqlPackage through ProcessStartInfo instead of PowerShell's native-command
+        # pipeline. On newer PowerShell versions a non-zero native exit can honor
+        # $ErrorActionPreference='Stop' and throw before $LASTEXITCODE/output can be
+        # inspected, which would hide the very diagnostics we need to report.
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $Executable
+        $startInfo.UseShellExecute = $false
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.CreateNoWindow = $true
+        foreach ($argument in $arguments) {
+            [void]$startInfo.ArgumentList.Add([string]$argument)
+        }
+
+        $process = [System.Diagnostics.Process]::new()
+        $process.StartInfo = $startInfo
+        try {
+            if (-not $process.Start()) {
+                throw "Unable to start SqlPackage executable '$Executable'."
+            }
+            $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+            $stderrTask = $process.StandardError.ReadToEndAsync()
+            $process.WaitForExit()
+            $stdoutText = $stdoutTask.GetAwaiter().GetResult()
+            $stderrText = $stderrTask.GetAwaiter().GetResult()
+            $exitCode = $process.ExitCode
+        }
+        finally {
+            $process.Dispose()
+        }
+
         if ($exitCode -ne 0) {
             Write-CollectorError "SqlPackage failed for database '$DatabaseName' with exit code $exitCode."
-            foreach ($line in $consoleOutput) {
-                if ($null -ne $line -and -not [string]::IsNullOrWhiteSpace([string]$line)) {
-                    Write-CollectorError ("SqlPackage console: " + [string]$line)
+            foreach ($entry in @(@{ Name = 'stdout'; Text = $stdoutText }, @{ Name = 'stderr'; Text = $stderrText })) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$entry.Text)) {
+                    foreach ($line in ([string]$entry.Text -split "`r?`n")) {
+                        if (-not [string]::IsNullOrWhiteSpace($line)) {
+                            Write-CollectorError ("SqlPackage $($entry.Name): " + $line)
+                        }
+                    }
                 }
             }
             if (Test-Path -LiteralPath $diagnosticsFile) {
