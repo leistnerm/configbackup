@@ -53,6 +53,7 @@ git:
   pull_request:
     enabled: true
     provider: github
+    repository: auto   # derive OWNER/REPO from the configured remote
     draft: false
     title: 'ConfigBackup: {hostname}'
     body: 'Automated configuration snapshot for {hostname}.'
@@ -60,7 +61,7 @@ git:
     labels: []
 ```
 
-`mode: pull_request` uses a temporary linked Git worktree and an automation branch, so the repository's normal checkout may contain unrelated staged or unstaged user work without ConfigBackup modifying or committing it. `base_branch: auto` follows the configured remote's default branch. Built-in PR creation currently uses the GitHub CLI (`gh`); set `pull_request.enabled: false` if another scheduled process will create the PR.
+`mode: pull_request` uses a temporary linked Git worktree and an automation branch, so the repository's normal checkout may contain unrelated staged or unstaged user work without ConfigBackup modifying or committing it. `base_branch: auto` follows the configured remote's default branch. Built-in PR creation currently uses the GitHub CLI (`gh`); `pull_request.repository: auto` derives `[HOST/]OWNER/REPO` from the configured remote so `gh` does not depend on the caller's current directory. Set `pull_request.repository` explicitly for unusual remote layouts, or set `pull_request.enabled: false` if another scheduled process will create the PR.
 
 `git.worktree_root` is optional. When omitted, pull-request mode uses `<TEMP>/cbwt/<short-id>`. If specified (for example `C:\cbwt`), ConfigBackup creates the short per-repository/branch worktree directory beneath that root. On Windows ConfigBackup passes `core.longpaths=true` to its own Git commands.
 

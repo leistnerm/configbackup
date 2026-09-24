@@ -84,6 +84,10 @@ python3 configbackup.py --config configbackup.yaml --dry-run
 python3 configbackup.py --config configbackup.yaml
 ```
 
+### Deterministic SQL schema output
+
+The SQL Server collector enables SqlPackage `ScriptSortElementsByName=True` by default so child elements such as extended properties are emitted in a stable name order. This substantially reduces false Git/hash changes between identical database extracts.
+
 ## Included examples
 
 - `examples/windows.yaml` — basic Windows file/directory backup.
@@ -168,6 +172,7 @@ git:
   pull_request:
     enabled: true
     provider: github
+    repository: auto
 
 tasks:
   - name: sql-history

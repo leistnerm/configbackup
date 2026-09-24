@@ -58,14 +58,6 @@ tasks:
       - '${SCRIPT_ROOT}\collectors\sqlserver\Collect-SqlServerConfiguration.ps1'
       - -SqlInstance
       - ${SQL_SERVER}
-      # SQL authentication options (do not put the password in YAML):
-      # Default environment variables: CONFIGBACKUP_SQL_USERNAME / CONFIGBACKUP_SQL_PASSWORD
-      # - -SqlCredentialFile
-      # - 'C:\ProgramData\ConfigBackup\sql.credential.clixml'
-      # - -SqlUsernameEnvironmentVariable
-      # - MY_SQL_USERNAME
-      # - -SqlPasswordEnvironmentVariable
-      # - MY_SQL_PASSWORD
       # Optional:
       # - -Database
       # - 'AppDb,ReportingDb'

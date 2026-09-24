@@ -38,6 +38,8 @@ git:
   pull_request:
     enabled: true
     provider: github
+    # Usually leave this as auto; ConfigBackup derives OWNER/REPO from origin.
+    repository: auto
     draft: false
     title: 'ConfigBackup: {hostname}'
     body: |
@@ -129,6 +131,28 @@ git:
 ConfigBackup will still create/update/push the automation branch. A separate script can then use `gh pr create`, an API, Azure DevOps CLI, GitLab CLI, etc.
 
 At present ConfigBackup's built-in PR provider is GitHub via the `gh` CLI. Git branch/worktree storage itself remains provider-neutral.
+
+### GitHub repository selection
+
+By default, `git.pull_request.repository: auto` derives the GitHub repository from `git.remote_name` (normally `origin`) and supplies it to `gh` explicitly through `GH_REPO`. This means PR creation does not depend on the directory from which ConfigBackup was launched and does not depend on `gh` inferring a repository from the temporary worktree.
+
+For GitHub.com, an origin such as `https://github.com/ORG/REPO.git` or `git@github.com:ORG/REPO.git` resolves to `ORG/REPO`. GitHub Enterprise remotes resolve to `HOST/ORG/REPO`.
+
+Override it when necessary:
+
+```yaml
+git:
+  pull_request:
+    enabled: true
+    provider: github
+    repository: ORG/REPO
+```
+
+or for GitHub Enterprise:
+
+```yaml
+repository: github.example.com/ORG/REPO
+```
 
 ## Git-only ignores
 

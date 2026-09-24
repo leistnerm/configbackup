@@ -513,7 +513,7 @@ tasks:
             gh = bin_dir / "gh"
             gh.write_text(
                 "#!/bin/sh\n"
-                f"echo \"$@\" >> '{gh_log}'\n"
+                f"echo \"GH_REPO=$GH_REPO ARGS=$@\" >> '{gh_log}'\n"
                 "if [ \"$1 $2\" = \"pr list\" ]; then echo '[]'; exit 0; fi\n"
                 "if [ \"$1 $2\" = \"pr create\" ]; then echo 'https://github.example/pr/1'; exit 0; fi\n"
                 "exit 0\n",
@@ -547,6 +547,7 @@ git:
   pull_request:
     enabled: true
     provider: github
+    repository: example/config-repo
     title: 'Config snapshot {{hostname}}'
 options:
   log_level: CRITICAL
@@ -566,10 +567,47 @@ tasks:
                     self.assertEqual(cb.BackupEngine(cb.ConfigLoader(cfg_path).load()).run(), 0)
             log = gh_log.read_text(encoding="utf-8")
             self.assertIn("auth status", log)
+            self.assertIn("GH_REPO=example/config-repo", log)
             self.assertIn("pr list", log)
             self.assertIn("pr create", log)
             self.assertIn("--base main", log)
             self.assertIn("--head configbackup/test-pr", log)
+
+
+    def test_github_repo_selector_derives_https_and_ssh_remotes(self):
+        import subprocess
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            cfg_path = base / "config.yaml"
+            cfg_path.write_text(
+                f"""
+backup:
+  root: {base / 'state'}
+git:
+  repository: {base / 'repo'}
+  mode: pull_request
+  push: true
+  pull_request:
+    enabled: true
+options:
+  log_level: CRITICAL
+tasks:
+  - name: noop
+    type: file
+    source: {base / 'missing.txt'}
+    storage: git
+""",
+                encoding="utf-8",
+            )
+            engine = cb.BackupEngine(cb.ConfigLoader(cfg_path).load())
+            cp = subprocess.CompletedProcess(["git"], 0, stdout="https://github.com/acme/infrastructure.git\n", stderr="")
+            with mock.patch.object(engine, "_git_control_command", return_value=cp):
+                self.assertEqual(engine._github_repo_selector(), "acme/infrastructure")
+            cp = subprocess.CompletedProcess(["git"], 0, stdout="git@github.example.com:acme/infrastructure.git\n", stderr="")
+            with mock.patch.object(engine, "_git_control_command", return_value=cp):
+                self.assertEqual(engine._github_repo_selector(), "github.example.com/acme/infrastructure")
+
 
 
     def test_git_pull_request_mode_cleans_legacy_configbackup_worktree_for_branch(self):
