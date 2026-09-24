@@ -162,94 +162,7 @@ Useful upstream documentation:
 
 By default the collector uses the identity running PowerShell/ConfigBackup. Integrated authentication/service identities are preferred for unattended operation.
 
-SQL authentication is also supported without putting a password in ConfigBackup YAML. Credential precedence is:
-
-1. `-SqlCredentialFile` or `CONFIGBACKUP_SQL_CREDENTIAL_FILE`;
-2. the configured username/password environment-variable pair;
-3. integrated authentication.
-
-If only one environment variable in the pair is present, the collector fails rather than silently falling back to integrated authentication.
-
-### Environment variables
-
-The default names are:
-
-```text
-CONFIGBACKUP_SQL_USERNAME
-CONFIGBACKUP_SQL_PASSWORD
-```
-
-For an interactive test:
-
-```powershell
-$env:CONFIGBACKUP_SQL_USERNAME = 'configbackup_reader'
-$env:CONFIGBACKUP_SQL_PASSWORD = '<secret>'
-py configbackup.py --config configbackup.yaml
-```
-
-The scheduled process must inherit those variables. You can use different variable names without exposing their values in YAML:
-
-```yaml
-arguments:
-  - -SqlUsernameEnvironmentVariable
-  - MY_SQL_USER
-  - -SqlPasswordEnvironmentVariable
-  - MY_SQL_PASSWORD
-```
-
-Set `-DisableEnvironmentSqlCredentials` when you want to guarantee that ambient ConfigBackup SQL environment variables are ignored and integrated authentication is used unless a credential file is explicitly supplied.
-
-### Windows encrypted CLIXML credential file
-
-On Windows, a convenient unattended option is a `PSCredential` exported with PowerShell:
-
-```powershell
-$cred = Get-Credential
-$cred | Export-Clixml 'C:\ProgramData\ConfigBackup\sql.credential.clixml'
-```
-
-Then configure only the file path:
-
-```yaml
-arguments:
-  - -SqlCredentialFile
-  - 'C:\ProgramData\ConfigBackup\sql.credential.clixml'
-```
-
-The scheduled task must run as the **same Windows user on the same computer** that created the file, because Windows PowerShell/PowerShell protects exported credential material with DPAPI. Do not use CLIXML as a secure credential store on Linux/macOS; PowerShell does not encrypt exported CLIXML credentials there.
-
-You can also set only:
-
-```text
-CONFIGBACKUP_SQL_CREDENTIAL_FILE=C:\ProgramData\ConfigBackup\sql.credential.clixml
-```
-
-without adding a credential-file argument to YAML.
-
-### JSON credential file
-
-For secret-file mounts or other cross-platform automation, a JSON file is supported:
-
-```json
-{
-  "username": "configbackup_reader",
-  "password": "secret-value"
-}
-```
-
-Use:
-
-```yaml
-arguments:
-  - -SqlCredentialFile
-  - '/run/secrets/configbackup-sql.json'
-```
-
-JSON is plaintext. Restrict the file to the ConfigBackup service identity (for example mode `0600` on Linux) and prefer a secret-management mechanism that creates the file only for the scheduled process.
-
-### SqlPackage note
-
-dbatools receives SQL authentication as a `PSCredential`. SqlPackage is a separate process and Microsoft exposes `/SourceUser` and `/SourcePassword` (or `/SourceConnectionString`) for SQL authentication. The collector never logs the password and redacts password material from diagnostics, but the credential can be transiently visible to sufficiently privileged local process-inspection tools while SqlPackage is running. Integrated authentication/service identities avoid that limitation.
+Do not place SQL passwords in ConfigBackup YAML. If an alternate authentication mechanism is required, adapt the collector to use your approved secret store/identity mechanism.
 
 ## Database selection
 
@@ -277,10 +190,6 @@ Default: accessible user databases only.
 -CollectLocalHostConfiguration Force local Linux host collection when using an alias/CNAME
 -TrustServerCertificate
 -AppendConnectionString 'MultiSubnetFailover=True;ApplicationIntent=ReadOnly'
--SqlCredentialFile <path>
--SqlUsernameEnvironmentVariable CONFIGBACKUP_SQL_USERNAME
--SqlPasswordEnvironmentVariable CONFIGBACKUP_SQL_PASSWORD
--DisableEnvironmentSqlCredentials
 ```
 
 `-SkipIspac` is useful for Git-only history because `.ispac` files are ZIP/binary artifacts and can cause repository growth while providing poor text diffs. The expanded `.dtsx`/project files remain available.
@@ -442,6 +351,8 @@ The collector does not hard-code the identifier column exposed by `SSISDB.catalo
 
 Per-database schema files are generated with SqlPackage using `ExtractTarget=SchemaObjectType`. The collector uses an encrypted source connection. Certificate validation remains enabled unless the collector is explicitly launched with `-TrustServerCertificate`.
 
+To make repeated extracts stable for source control and hashing, the collector also enables SqlPackage `ScriptSortElementsByName=True` by default. This asks DacFx to sort child elements by name rather than relying on database/catalog enumeration order. It is particularly useful for extended properties and other child elements whose output order can otherwise vary between runs. Use `-DisableSchemaElementSorting` only if you need to troubleshoot a DacFx compatibility issue.
+
 Schema-model verification is **disabled by default**, matching SqlPackage's documented default and Microsoft's source-control extraction examples. To request DacFx model verification, add:
 
 ```powershell
@@ -456,10 +367,6 @@ For advanced **non-secret** connection properties, use `-AppendConnectionString`
 
 ```powershell
 -AppendConnectionString 'MultiSubnetFailover=True;ApplicationIntent=ReadOnly'
--SqlCredentialFile <path>
--SqlUsernameEnvironmentVariable CONFIGBACKUP_SQL_USERNAME
--SqlPasswordEnvironmentVariable CONFIGBACKUP_SQL_PASSWORD
--DisableEnvironmentSqlCredentials
 ```
 
 Those properties are appended to the dbatools connection and, for SqlPackage extraction, the collector switches to `/SourceConnectionString`. Endpoint, database, authentication, timeout, encryption, certificate-trust, and credential-bearing keys are rejected; use the collector's explicit parameters for those settings and never put passwords/tokens in YAML.

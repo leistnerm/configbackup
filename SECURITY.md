@@ -46,9 +46,3 @@ Run new configurations with `--validate` and `--dry-run` before scheduling them 
 ## SQL Server on Linux host artifacts
 
 When the SQL collector runs locally on a Linux SQL Server guest it can copy `/var/opt/mssql/mssql.conf` and systemd service configuration. These files normally contain configuration rather than database credentials, but they can reveal certificate/key paths, directory layout, service environment references, domain/account names, ports, and other operationally sensitive information. Treat them as confidential and review local customizations before pushing them to a remote Git repository. The parsed `mssql-settings.csv` redacts keys whose names look password/secret/token related, but the raw `mssql.conf` is preserved verbatim for recoverability.
-
-## SQL Server credentials
-
-Do not put SQL passwords directly in `configbackup.yaml` or collector arguments. The SQL Server collector supports credentials from environment variables or a credential file. On Windows, `Get-Credential | Export-Clixml` uses Windows DPAPI and binds the exported credential to the same Windows user and computer. On Linux/macOS, PowerShell CLIXML credential export is not encrypted; use environment injection or a tightly permissioned secret file/secret manager instead. JSON credential files are plaintext on every platform and must be protected accordingly.
-
-SqlPackage requires SQL-auth credentials for its independent database connection. When SQL authentication is used, the password is passed to the SqlPackage child process as a source credential argument (or in a source connection string when advanced connection options are enabled); this can be visible to sufficiently privileged local process-inspection tools while SqlPackage is running. Prefer integrated authentication/service identities when available.

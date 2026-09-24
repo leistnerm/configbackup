@@ -1,13 +1,17 @@
 # Changelog
 
-## 1.4.3 - 2026-09-23
+## 1.4.4 - 2026-09-24
 
-- Added SQL Server authentication from `CONFIGBACKUP_SQL_USERNAME` / `CONFIGBACKUP_SQL_PASSWORD` without storing secrets in YAML.
-- Added customizable SQL username/password environment-variable names.
-- Added `-SqlCredentialFile` and `CONFIGBACKUP_SQL_CREDENTIAL_FILE` support. Windows CLIXML/PSCredential files and JSON credential files are supported.
-- SQL credentials are passed to dbatools as `PSCredential` and to SqlPackage using SQL-auth source parameters.
-- Credential source is recorded (`integrated`, `environment`, or credential-file type) without recording the password.
-- Added diagnostic redaction for SQL password material.
+- Fixed GitHub pull-request automation so `gh pr list` / `gh pr create` no longer depend on the process current directory or on GitHub CLI inferring the repository from a temporary linked worktree.
+- ConfigBackup now derives the GitHub `[HOST/]OWNER/REPO` selector from the configured Git remote and supplies it to GitHub CLI through `GH_REPO`.
+- Added optional `git.pull_request.repository` override (`OWNER/REPO` or `HOST/OWNER/REPO`) for unusual remote layouts or explicit configuration.
+- Added regression coverage for HTTPS GitHub remotes, SCP-style SSH/GitHub Enterprise remotes, and PR automation with an explicit repository selector.
+
+## 1.4.3 - 2026-09-24
+
+- Enabled SqlPackage `ScriptSortElementsByName=True` by default for SQL Server schema extraction. This reduces non-semantic Git/hash churn when DacFx returns child elements (including extended properties) in a different order across otherwise identical extracts.
+- Added SQL collector switch `-DisableSchemaElementSorting` for troubleshooting or compatibility; normal collection should leave deterministic sorting enabled.
+- SQL collector logs and `collector.json` now record whether schema element sorting is enabled.
 
 ## 1.4.2 - 2026-09-23
 

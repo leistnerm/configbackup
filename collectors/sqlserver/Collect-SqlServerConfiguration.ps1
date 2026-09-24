@@ -43,6 +43,11 @@ param(
     # unresolved external references.
     [switch]$VerifySchemaExtraction,
 
+    # SqlPackage can otherwise emit child elements in unstable order between
+    # identical extracts. Keep DacFx name-sorting enabled by default so Git/hash
+    # history reflects semantic changes instead of collection-order churn.
+    [switch]$DisableSchemaElementSorting,
+
     [switch]$SkipSchema,
     [switch]$SkipInstanceExport,
     [switch]$SkipInventory,
@@ -76,14 +81,6 @@ param(
     # Endpoint, authentication, database, timeout, encryption, certificate-trust, and
     # credential-bearing keys are rejected because they are controlled explicitly.
     [string]$AppendConnectionString = '',
-
-    # SQL authentication credentials are never accepted directly on the command
-    # line. A credential file takes precedence over environment variables.
-    # If neither source is present, the current process identity is used.
-    [string]$SqlCredentialFile = $env:CONFIGBACKUP_SQL_CREDENTIAL_FILE,
-    [string]$SqlUsernameEnvironmentVariable = 'CONFIGBACKUP_SQL_USERNAME',
-    [string]$SqlPasswordEnvironmentVariable = 'CONFIGBACKUP_SQL_PASSWORD',
-    [switch]$DisableEnvironmentSqlCredentials,
 
     [ValidateRange(1, 600)]
     [int]$ConnectTimeout = 30
@@ -318,115 +315,6 @@ function Convert-SpaceRows {
     return @($rows | Sort-Object Database, FileType, FileName)
 }
 
-function ConvertTo-PlainTextSecret {
-    param([Parameter(Mandatory = $true)][System.Security.SecureString]$SecureString)
-
-    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureString)
-    try {
-        return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
-    }
-    finally {
-        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
-    }
-}
-
-function New-SqlCredentialFromPlainText {
-    param(
-        [Parameter(Mandatory = $true)][string]$Username,
-        [Parameter(Mandatory = $true)][string]$Password
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Username)) { throw 'SQL username is empty.' }
-    if ([string]::IsNullOrEmpty($Password)) { throw 'SQL password is empty.' }
-    $secure = ConvertTo-SecureString -String $Password -AsPlainText -Force
-    return [System.Management.Automation.PSCredential]::new($Username, $secure)
-}
-
-function Resolve-SqlCredential {
-    param(
-        [AllowEmptyString()][string]$CredentialFile,
-        [Parameter(Mandatory = $true)][string]$UsernameEnvironmentVariable,
-        [Parameter(Mandatory = $true)][string]$PasswordEnvironmentVariable,
-        [switch]$DisableEnvironment
-    )
-
-    if (-not [string]::IsNullOrWhiteSpace($CredentialFile)) {
-        $path = [System.IO.Path]::GetFullPath($CredentialFile)
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-            throw "SQL credential file does not exist: $path"
-        }
-
-        $extension = [System.IO.Path]::GetExtension($path).ToLowerInvariant()
-        if ($extension -in @('.clixml', '.xml', '.credential')) {
-            $imported = Import-Clixml -LiteralPath $path
-            if ($imported -isnot [System.Management.Automation.PSCredential]) {
-                throw "SQL credential CLIXML must contain a PSCredential object: $path"
-            }
-            return [pscustomobject]@{ Credential = $imported; Source = 'credential-file-clixml' }
-        }
-
-        if ($extension -eq '.json') {
-            $json = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
-            $username = [string](Get-ObjectPropertyValue $json 'username')
-            $password = [string](Get-ObjectPropertyValue $json 'password')
-            if ([string]::IsNullOrWhiteSpace($username) -or [string]::IsNullOrEmpty($password)) {
-                throw "SQL credential JSON must contain non-empty 'username' and 'password' properties: $path"
-            }
-            return [pscustomobject]@{
-                Credential = (New-SqlCredentialFromPlainText -Username $username -Password $password)
-                Source = 'credential-file-json'
-            }
-        }
-
-        throw "Unsupported SQL credential file extension '$extension'. Use .clixml/.xml/.credential or .json."
-    }
-
-    if ($DisableEnvironment) {
-        return [pscustomobject]@{ Credential = $null; Source = 'integrated' }
-    }
-
-    $username = [Environment]::GetEnvironmentVariable($UsernameEnvironmentVariable)
-    $password = [Environment]::GetEnvironmentVariable($PasswordEnvironmentVariable)
-    $hasUsername = -not [string]::IsNullOrWhiteSpace($username)
-    $hasPassword = -not [string]::IsNullOrEmpty($password)
-
-    if ($hasUsername -xor $hasPassword) {
-        throw "SQL environment credentials are incomplete. Set both '$UsernameEnvironmentVariable' and '$PasswordEnvironmentVariable', or neither."
-    }
-    if ($hasUsername -and $hasPassword) {
-        return [pscustomobject]@{
-            Credential = (New-SqlCredentialFromPlainText -Username $username -Password $password)
-            Source = 'environment'
-        }
-    }
-
-    return [pscustomobject]@{ Credential = $null; Source = 'integrated' }
-}
-
-function Protect-SensitiveText {
-    param(
-        [AllowNull()][string]$Text,
-        [AllowNull()][System.Management.Automation.PSCredential]$Credential
-    )
-
-    if ($null -eq $Text) { return $null }
-    $result = $Text
-    if ($null -ne $Credential) {
-        $plain = ConvertTo-PlainTextSecret -SecureString $Credential.Password
-        try {
-            if (-not [string]::IsNullOrEmpty($plain)) {
-                $result = $result -replace [regex]::Escape($plain), '<REDACTED>'
-            }
-        }
-        finally {
-            $plain = $null
-        }
-    }
-    $result = [regex]::Replace($result, '(?i)(Password|Pwd)\s*=\s*[^;\r\n]*', '$1=<REDACTED>')
-    $result = [regex]::Replace($result, '(?i)/SourcePassword:[^\s\r\n]+', '/SourcePassword:<REDACTED>')
-    return $result
-}
-
 function Assert-SafeAppendConnectionString {
     param([AllowEmptyString()][string]$Value)
 
@@ -447,22 +335,13 @@ function Get-SqlPackageSourceConnectionString {
         [Parameter(Mandatory = $true)][string]$DatabaseName,
         [int]$TimeoutSeconds,
         [switch]$TrustCertificate,
-        [AllowEmptyString()][string]$AdditionalOptions,
-        [AllowNull()][System.Management.Automation.PSCredential]$SqlCredential
+        [AllowEmptyString()][string]$AdditionalOptions
     )
 
     $builder = New-Object System.Data.SqlClient.SqlConnectionStringBuilder
     $builder.DataSource = $ServerName
     $builder.InitialCatalog = $DatabaseName
-    if ($null -eq $SqlCredential) {
-        $builder.IntegratedSecurity = $true
-    }
-    else {
-        $builder.IntegratedSecurity = $false
-        $builder.UserID = $SqlCredential.UserName
-        $plainPassword = ConvertTo-PlainTextSecret -SecureString $SqlCredential.Password
-        try { $builder.Password = $plainPassword } finally { $plainPassword = $null }
-    }
+    $builder.IntegratedSecurity = $true
     $builder.Encrypt = $true
     $builder.TrustServerCertificate = [bool]$TrustCertificate
     $builder.ConnectTimeout = $TimeoutSeconds
@@ -484,8 +363,8 @@ function Invoke-SqlPackageExtract {
         [int]$TimeoutSeconds,
         [switch]$TrustCertificate,
         [switch]$VerifyExtraction,
-        [AllowEmptyString()][string]$AdditionalConnectionOptions,
-        [AllowNull()][System.Management.Automation.PSCredential]$SqlCredential
+        [bool]$SortElementsByName = $true,
+        [AllowEmptyString()][string]$AdditionalConnectionOptions
     )
 
     # SqlPackage creates the SchemaObjectType target tree itself. Ensure only the
@@ -503,28 +382,22 @@ function Invoke-SqlPackageExtract {
     $diagnosticsFile = Join-Path ([System.IO.Path]::GetTempPath()) ("configbackup-sqlpackage-" + [guid]::NewGuid().ToString('N') + '.log')
     $verifyValue = if ($VerifyExtraction) { 'True' } else { 'False' }
     $trustValue = if ($TrustCertificate) { 'True' } else { 'False' }
+    $sortElementsValue = if ($SortElementsByName) { 'True' } else { 'False' }
 
     if ([string]::IsNullOrWhiteSpace($AdditionalConnectionOptions)) {
-        # Keep the default invocation easy to reproduce manually. SQL authentication
-        # uses SqlPackage's SourceUser/SourcePassword parameters; integrated auth omits
-        # them entirely. The password is never written by ConfigBackup itself.
+        # Keep the default invocation identical to a normal SqlPackage CLI command. This
+        # path is intentionally simple because it is also easy to reproduce manually.
         $arguments = @(
             '/Action:Extract',
             "/SourceServerName:$ServerName",
             "/SourceDatabaseName:$DatabaseName",
             "/SourceTimeout:$TimeoutSeconds",
             '/SourceEncryptConnection:True',
-            "/SourceTrustServerCertificate:$trustValue"
-        )
-        if ($null -ne $SqlCredential) {
-            $plainPassword = ConvertTo-PlainTextSecret -SecureString $SqlCredential.Password
-            $arguments += "/SourceUser:$($SqlCredential.UserName)"
-            $arguments += "/SourcePassword:$plainPassword"
-        }
-        $arguments += @(
+            "/SourceTrustServerCertificate:$trustValue",
             "/TargetFile:$TargetDirectory",
             '/p:ExtractTarget=SchemaObjectType',
             '/p:ExtractAllTableData=False',
+            "/p:ScriptSortElementsByName=$sortElementsValue",
             "/p:VerifyExtraction=$verifyValue",
             '/Diagnostics:True',
             "/DiagnosticsFile:$diagnosticsFile",
@@ -537,8 +410,7 @@ function Invoke-SqlPackageExtract {
             -DatabaseName $DatabaseName `
             -TimeoutSeconds $TimeoutSeconds `
             -TrustCertificate:$TrustCertificate `
-            -AdditionalOptions $AdditionalConnectionOptions `
-            -SqlCredential $SqlCredential
+            -AdditionalOptions $AdditionalConnectionOptions
 
         $arguments = @(
             '/Action:Extract',
@@ -546,6 +418,7 @@ function Invoke-SqlPackageExtract {
             "/TargetFile:$TargetDirectory",
             '/p:ExtractTarget=SchemaObjectType',
             '/p:ExtractAllTableData=False',
+            "/p:ScriptSortElementsByName=$sortElementsValue",
             "/p:VerifyExtraction=$verifyValue",
             '/Diagnostics:True',
             "/DiagnosticsFile:$diagnosticsFile",
@@ -553,7 +426,7 @@ function Invoke-SqlPackageExtract {
         )
     }
 
-    Write-CollectorMessage "Extracting schema: $DatabaseName (verify=$verifyValue trust_server_certificate=$trustValue)"
+    Write-CollectorMessage "Extracting schema: $DatabaseName (verify=$verifyValue trust_server_certificate=$trustValue sort_elements_by_name=$sortElementsValue)"
     try {
         # Use PowerShell's native invocation operator so argument semantics match the
         # standalone command administrators can reproduce at a console. Temporarily
@@ -590,7 +463,7 @@ function Invoke-SqlPackageExtract {
                 if ($diagnosticLines.Count -gt 0) {
                     Write-CollectorError 'SqlPackage diagnostics:'
                     foreach ($line in @($diagnosticLines | Select-Object -Last 300)) {
-                        Write-CollectorError ("SqlPackage diagnostic: " + (Protect-SensitiveText -Text ([string]$line) -Credential $SqlCredential))
+                        Write-CollectorError ("SqlPackage diagnostic: " + [string]$line)
                     }
                 }
             }
@@ -598,7 +471,6 @@ function Invoke-SqlPackageExtract {
         }
     }
     finally {
-        if (Get-Variable -Name plainPassword -Scope Local -ErrorAction SilentlyContinue) { $plainPassword = $null }
         Remove-Item -LiteralPath $diagnosticsFile -Force -ErrorAction SilentlyContinue
     }
 }
@@ -1375,21 +1247,10 @@ try {
 
     Assert-SafeAppendConnectionString -Value $AppendConnectionString
 
-    $sqlCredentialInfo = Resolve-SqlCredential `
-        -CredentialFile $SqlCredentialFile `
-        -UsernameEnvironmentVariable $SqlUsernameEnvironmentVariable `
-        -PasswordEnvironmentVariable $SqlPasswordEnvironmentVariable `
-        -DisableEnvironment:$DisableEnvironmentSqlCredentials
-    $sqlCredential = $sqlCredentialInfo.Credential
-    Write-CollectorMessage ("SQL authentication: {0}" -f $sqlCredentialInfo.Source)
-
     $connectArgs = @{
         SqlInstance    = $SqlInstance
         ClientName     = 'ConfigBackup.SqlCollector'
         ConnectTimeout = $ConnectTimeout
-    }
-    if ($null -ne $sqlCredential) {
-        $connectArgs.SqlCredential = $sqlCredential
     }
     if (-not [string]::IsNullOrWhiteSpace($AppendConnectionString)) {
         $connectArgs.AppendConnectionString = $AppendConnectionString.Trim().Trim(';') + ';'
@@ -1459,10 +1320,10 @@ try {
         SqlPackageVersion     = $sqlPackageVersion
         SchemaExtraction      = (-not $SkipSchema)
         VerifySchemaExtraction = [bool]$VerifySchemaExtraction
+        SortSchemaElementsByName = (-not [bool]$DisableSchemaElementSorting)
         InstanceExport        = (-not $SkipInstanceExport)
         Inventory             = (-not $SkipInventory)
         PasswordMaterial      = 'excluded'
-        AuthenticationSource  = $sqlCredentialInfo.Source
         SqlAgent               = (-not $SkipAgent)
         Ssis                   = (-not $SkipSsis)
         IspacFiles             = (-not $SkipIspac)
@@ -1569,8 +1430,8 @@ try {
                 TimeoutSeconds  = $ConnectTimeout
                 TrustCertificate = [bool]$TrustServerCertificate
                 VerifyExtraction = [bool]$VerifySchemaExtraction
+                SortElementsByName = (-not [bool]$DisableSchemaElementSorting)
                 AdditionalConnectionOptions = $AppendConnectionString
-                SqlCredential   = $sqlCredential
             }
             Invoke-SqlPackageExtract @extractArgs
         }

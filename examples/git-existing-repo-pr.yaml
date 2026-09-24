@@ -25,6 +25,7 @@ git:
   pull_request:
     enabled: true
     provider: github
+    repository: auto
     draft: false
     title: 'ConfigBackup: {hostname}'
     body: |
