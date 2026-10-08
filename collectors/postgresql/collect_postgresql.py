@@ -30,7 +30,7 @@ import sys
 from pathlib import Path
 from typing import Any, Iterable
 
-COLLECTOR_VERSION = "1.3.14"
+COLLECTOR_VERSION = "1.5.0"
 
 
 class CollectorError(RuntimeError):
@@ -81,6 +81,9 @@ def stable_csv(path: Path, rows: Iterable[dict[str, Any]], fieldnames: list[str]
         for row in rows:
             keys.update(str(k) for k in row.keys())
         fieldnames = sorted(keys)
+    # Database catalog row order is not guaranteed unless explicitly sorted.
+    # Canonicalize all CSV rows at the output boundary as an additional guard.
+    rows.sort(key=lambda row: tuple(str(normalize_scalar(row.get(k))) for k in fieldnames))
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore", lineterminator="\n")
         if fieldnames:
@@ -243,7 +246,7 @@ class PgTools:
             raise CollectorError(f"psql returned invalid JSON for database {database}: {exc}") from exc
         if not isinstance(value, list):
             raise CollectorError(f"Unexpected psql JSON shape for database {database}")
-        return [dict(x) for x in value]
+        return sorted((dict(x) for x in value), key=lambda x: json.dumps(x, sort_keys=True, default=str, ensure_ascii=False))
 
     def psql_scalar(self, database: str, expression: str) -> str:
         cp = self.run(
@@ -852,6 +855,20 @@ def collect_schedulers(tools: PgTools, db: str, db_root: Path, failures: list[di
             # The command is intentionally retained; it is the scheduled configuration.
             # It may itself contain secrets, so SECURITY.md warns to protect the archive.
             stable_csv(db_root / "schedulers" / "pg-cron-jobs.csv", cron_rows)
+            if getattr(tools.args, "include_scheduler_history", False):
+                history = record_optional(
+                    failures,
+                    f"database.{db}.scheduler.pg_cron.history",
+                    lambda: tools.psql_rows(db, """
+                        SELECT jobid, start_time, end_time, status
+                        FROM cron.job_run_details
+                        WHERE start_time >= now() - interval '60 days'
+                        ORDER BY jobid, start_time
+                        LIMIT 20000
+                    """),
+                )
+                if history is not None:
+                    stable_csv(db_root / "schedulers" / "pg-cron-runs.csv", history)
 
     if "pgagent" in extnames:
         for table, out_name in [
@@ -1171,6 +1188,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--skip-object-files", action="store_true", help="Skip per-object diff-oriented SQL files")
     parser.add_argument("--split-table-ddl", action="store_true", help="Also run pg_dump pre-data per table (more expensive)")
     parser.add_argument("--skip-schedulers", action="store_true", help="Skip pg_cron/pgAgent discovery")
+    parser.add_argument("--include-scheduler-history", action="store_true", help="Export rolling pg_cron run durations (volatile; keep out of Git history)")
     parser.add_argument("--include-sizes", action="store_true", help="Include volatile database/relation size inventories")
     parser.add_argument(
         "--include-raw-config-files",

@@ -289,3 +289,9 @@ python3 collectors/postgresql/collect_postgresql.py \
 ## What this is not
 
 This collector contains configuration/schema definitions, not database table data. Continue to use an appropriate PostgreSQL data/DR strategy such as physical/base backups with WAL archiving, managed-service backups, or another tested recovery design.
+
+## Determinism and scheduler runtime history (1.5.0)
+
+Catalog query row arrays and CSV inventories are now sorted canonically before writing, even when PostgreSQL returns otherwise equivalent rows in different orders. Native `pg_dump`/`pg_dumpall` output is left in PostgreSQL's own dependency-safe ordering; the existing normalization removes only known volatile banner timestamps and the collector uses a fixed `--restrict-key` when supported.
+
+To optionally export recent `pg_cron` start/end/status data without log messages or raw command outputs, add `--include-scheduler-history`. The resulting `pg-cron-runs.csv` is intentionally volatile; exclude it from Git if you want only configuration diffs. The new offline analyzer can derive median/P95 durations from that file.

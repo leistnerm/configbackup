@@ -1,0 +1,97 @@
+# Integration example. Customize roots and copy relevant tasks into your
+# existing configbackup.yaml. Run `--validate` before enabling scheduling.
+backup:
+  root: 'C:\ConfigBackup'
+  include_hostname: true
+
+variables:
+  PYTHON: 'py'
+  PWSH: 'C:\Program Files\PowerShell\7\pwsh.exe'
+  CONFIGBACKUP_HOME: 'C:\Admin\ConfigBackup'
+  SQL_SERVER: 'SQL01'
+  SYSTEM_STAGING: '${CONFIGBACKUP_STAGING}/system'
+  SQL_STAGING: '${CONFIGBACKUP_STAGING}/sql-server'
+  SCHEDULE_STAGING: '${CONFIGBACKUP_STAGING}/schedule-report'
+
+tasks:
+  - name: collect-system
+    type: execute
+    phase: pre_backup
+    executable: ${PYTHON}
+    arguments:
+      - -3
+      - '${CONFIGBACKUP_HOME}\collectors\system\collect_system.py'
+      - --include-task-history
+    output_directory: ${SYSTEM_STAGING}
+    clean_output: true
+    timeout: 1200
+    required: true
+
+  - name: collect-sql
+    type: execute
+    phase: pre_backup
+    executable: ${PWSH}
+    arguments:
+      - -NoLogo
+      - -NoProfile
+      - -NonInteractive
+      - -File
+      - '${CONFIGBACKUP_HOME}\collectors\sqlserver\Collect-SqlServerConfiguration.ps1'
+      - -SqlInstance
+      - ${SQL_SERVER}
+      - -TrustServerCertificate  # Only if intentionally appropriate for your server.
+      - -IncludeAgentHistory
+      - -AgentHistoryDays
+      - '60'
+    output_directory: ${SQL_STAGING}
+    clean_output: true
+    timeout: 7200
+    required: true
+
+  # Archive stable definitions separately. Execution history is rolling and
+  # should be excluded from Git via git.ignore if storage is changed to both.
+  - name: archive-system
+    type: directory
+    source: ${SYSTEM_STAGING}
+    destination: system
+    depends_on: [collect-system]
+    storage: filesystem
+
+  - name: archive-sql
+    type: directory
+    source: ${SQL_STAGING}
+    destination: sql
+    depends_on: [collect-sql]
+    storage: filesystem
+
+  - name: analyze-schedules
+    type: execute
+    phase: pre_backup
+    executable: ${PYTHON}
+    arguments:
+      - -3
+      - '${CONFIGBACKUP_HOME}\collectors\schedule\analyze_schedules.py'
+      - --system
+      - ${SYSTEM_STAGING}
+      - --sql
+      - ${SQL_STAGING}
+      - --sql-host
+      - ${SQL_SERVER}
+      - --config
+      - '${CONFIGBACKUP_HOME}\examples\schedule-report.yaml'
+      - --output
+      - ${SCHEDULE_STAGING}
+      - --days
+      - '35'
+    output_directory: ${SCHEDULE_STAGING}
+    clean_output: true
+    timeout: 600
+    depends_on: [collect-system, collect-sql]
+    required: true
+
+  - name: archive-schedule-report
+    type: directory
+    source: ${SCHEDULE_STAGING}
+    destination: schedule-analysis
+    depends_on: [analyze-schedules]
+    storage: filesystem

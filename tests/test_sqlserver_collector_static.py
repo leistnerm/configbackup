@@ -104,6 +104,17 @@ class SqlServerCollectorStaticTests(unittest.TestCase):
         self.assertIn('"/SourceConnectionString:$sourceConnectionString"', script)
         self.assertIn(r"password|pwd|user\s*id|uid|access\s*token", script)
 
+
+    def test_instance_export_retries_transient_database_transition_only(self):
+        script = (Path(__file__).resolve().parents[1] / "collectors" / "sqlserver" / "Collect-SqlServerConfiguration.ps1").read_text(encoding="utf-8")
+        self.assertIn("[int]$InstanceExportTransitionRetries = 3", script)
+        self.assertIn("[int]$InstanceExportTransitionDelaySeconds = 15", script)
+        self.assertIn("function Get-TransitionDatabaseName", script)
+        self.assertIn("is in transition", script)
+        self.assertIn("Clear-InstanceExportTempRoot -Path $tempRoot", script)
+        self.assertIn("Transient database transition detected during instance export", script)
+        self.assertIn("Database '{0}' remained in transition after {1} attempt(s).", script)
+
     def test_no_trailing_comma_before_closing_parenthesis(self):
         import re
         script = (Path(__file__).resolve().parents[1] / "collectors" / "sqlserver" / "Collect-SqlServerConfiguration.ps1").read_text(encoding="utf-8")
