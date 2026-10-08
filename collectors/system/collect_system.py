@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 from typing import Any, Iterable
 
-COLLECTOR_VERSION = "1.3.14"
+COLLECTOR_VERSION = "1.5.0"
 
 
 def eprint(msg: str) -> None:
@@ -55,6 +55,7 @@ def stable_csv(path: Path, rows: Iterable[dict[str, Any]], fieldnames: list[str]
         for row in rows:
             keys.update(str(k) for k in row)
         fieldnames = sorted(keys)
+    rows.sort(key=lambda row: tuple(str(normalize_scalar(row.get(k))) for k in fieldnames))
     with path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore", lineterminator="\n")
         if fieldnames:
@@ -289,6 +290,36 @@ def collect_linux(root: Path, args: argparse.Namespace, failures: list[dict[str,
                 lines = sorted(x.strip() for x in cp.stdout.splitlines() if x.strip())
                 stable_text(root / "services" / out, "\n".join(lines))
 
+    # Capture systemd timer definitions, excluding volatile next-elapse timestamps.
+    if command_exists("systemctl"):
+        cp = run(["systemctl", "list-unit-files", "--type=timer", "--no-pager", "--no-legend"], timeout=60)
+        if cp.returncode == 0:
+            timers = []
+            for line in cp.stdout.splitlines():
+                parts = line.split()
+                if len(parts) < 2 or not parts[0].endswith(".timer"):
+                    continue
+                name, state = parts[:2]
+                content = run(["systemctl", "cat", name, "--no-pager"], timeout=15)
+                if content.returncode != 0:
+                    continue
+                calendar_specs = []
+                monotonic_specs = []
+                random_delay = ""
+                for text in content.stdout.splitlines():
+                    text = text.strip()
+                    if text.startswith("OnCalendar="):
+                        calendar_specs.append(text.partition("=")[2])
+                    if text.startswith(("OnBootSec=", "OnUnitActiveSec=", "OnUnitInactiveSec=", "OnStartupSec=")):
+                        monotonic_specs.append(text)
+                    if text.startswith("RandomizedDelaySec="):
+                        random_delay = text.partition("=")[2]
+                timers.append({"unit": name, "unit_state": state,
+                               "on_calendar": ";".join(sorted(calendar_specs)),
+                               "monotonic": ";".join(sorted(monotonic_specs)),
+                               "randomized_delay": random_delay})
+            stable_csv(root / "scheduling" / "systemd-timers.csv", timers)
+
     # Cron definitions are configuration; copy text but never spool/history.
     cron_out = root / "scheduling" / "cron"
     for path in [Path("/etc/crontab"), Path("/etc/anacrontab")]:
@@ -522,10 +553,44 @@ def collect_windows(root: Path, args: argparse.Namespace, failures: list[dict[st
         stable_json(root / "services" / "services.json", services)
 
     tasks = best_effort("scheduled-tasks", lambda: run_ps_json(
-        "Get-ScheduledTask | Sort-Object TaskPath,TaskName | ForEach-Object { $t=$_; [pscustomobject]@{TaskPath=$t.TaskPath;TaskName=$t.TaskName;Author=$t.Author;Description=$t.Description;URI=$t.URI;Actions=@($t.Actions|ForEach-Object{[pscustomobject]@{Execute=$_.Execute;Arguments=$_.Arguments;WorkingDirectory=$_.WorkingDirectory;ClassId=$_.ClassId}});Triggers=@($t.Triggers|ForEach-Object{[pscustomobject]@{Enabled=$_.Enabled;StartBoundary=$_.StartBoundary;EndBoundary=$_.EndBoundary;ExecutionTimeLimit=$_.ExecutionTimeLimit;RandomDelay=$_.RandomDelay;Repetition=$_.Repetition;CimClass=$_.CimClass.CimClassName}});Principal=[pscustomobject]@{UserId=$t.Principal.UserId;GroupId=$t.Principal.GroupId;LogonType=[string]$t.Principal.LogonType;RunLevel=[string]$t.Principal.RunLevel};Settings=[pscustomobject]@{Enabled=$t.Settings.Enabled;Hidden=$t.Settings.Hidden;AllowDemandStart=$t.Settings.AllowDemandStart;StartWhenAvailable=$t.Settings.StartWhenAvailable;RunOnlyIfNetworkAvailable=$t.Settings.RunOnlyIfNetworkAvailable;WakeToRun=$t.Settings.WakeToRun;ExecutionTimeLimit=$t.Settings.ExecutionTimeLimit}} }"
+        "Get-ScheduledTask | Sort-Object TaskPath,TaskName | ForEach-Object { $t=$_; [pscustomobject]@{TaskPath=$t.TaskPath;TaskName=$t.TaskName;Author=$t.Author;Description=$t.Description;URI=$t.URI;Actions=@($t.Actions|ForEach-Object{[pscustomobject]@{Execute=$_.Execute;Arguments=$_.Arguments;WorkingDirectory=$_.WorkingDirectory;ClassId=$_.ClassId}});Triggers=@($t.Triggers|ForEach-Object{[pscustomobject]@{Enabled=$_.Enabled;StartBoundary=$_.StartBoundary;EndBoundary=$_.EndBoundary;ExecutionTimeLimit=$_.ExecutionTimeLimit;RandomDelay=$_.RandomDelay;Repetition=[pscustomobject]@{Interval=[string]$_.Repetition.Interval;Duration=[string]$_.Repetition.Duration;StopAtDurationEnd=$_.Repetition.StopAtDurationEnd};DaysInterval=$_.DaysInterval;WeeksInterval=$_.WeeksInterval;DaysOfWeek=$_.DaysOfWeek;DaysOfMonth=$_.DaysOfMonth;WeeksOfMonth=$_.WeeksOfMonth;MonthsOfYear=$_.MonthsOfYear;RunOnLastDayOfMonth=$_.RunOnLastDayOfMonth;RunOnLastWeekOfMonth=$_.RunOnLastWeekOfMonth;CimClass=$_.CimClass.CimClassName}});Principal=[pscustomobject]@{UserId=$t.Principal.UserId;GroupId=$t.Principal.GroupId;LogonType=[string]$t.Principal.LogonType;RunLevel=[string]$t.Principal.RunLevel};Settings=[pscustomobject]@{Enabled=$t.Settings.Enabled;Hidden=$t.Settings.Hidden;AllowDemandStart=$t.Settings.AllowDemandStart;StartWhenAvailable=$t.Settings.StartWhenAvailable;RunOnlyIfNetworkAvailable=$t.Settings.RunOnlyIfNetworkAvailable;WakeToRun=$t.Settings.WakeToRun;ExecutionTimeLimit=$t.Settings.ExecutionTimeLimit}} }"
     ), failures, required=False)
     if tasks is not None:
         stable_json(root / "scheduling" / "scheduled-tasks.json", tasks)
+
+    # Optional historical runtimes from Task Scheduler Operational log events
+    # 100 (started) and 102 (completed). Only completed matched instances count.
+    # Store separately from stable config inventory: this rolls each day.
+    if args.include_task_history:
+        event_query = r"""
+$log='Microsoft-Windows-TaskScheduler/Operational'
+$cutoff=(Get-Date).AddDays(-{days})
+$events=@(Get-WinEvent -FilterHashtable @{{LogName=$log;Id=100,102;StartTime=$cutoff}} -MaxEvents 50000 -ErrorAction Stop | Sort-Object TimeCreated)
+$started=@{{}}
+foreach($event in $events){{
+  [xml]$xml=$event.ToXml()
+  $data=@{{}}
+  foreach($field in @($xml.Event.EventData.Data)){{
+    if($field.Name){{ $data[[string]$field.Name]=[string]$field.'#text' }}
+  }}
+  $instance=$data['InstanceId'];$name=$data['TaskName']
+  if(-not $instance -or -not $name){{continue}}
+  $key="$name|$instance"
+  if($event.Id -eq 100){{ $started[$key]=$event.TimeCreated;continue }}
+  if($event.Id -eq 102 -and $started.ContainsKey($key)){{
+    $begin=$started[$key];$started.Remove($key)
+    $minutes=($event.TimeCreated-$begin).TotalMinutes
+    if($minutes -ge 0){{
+      [pscustomobject]@{{TaskName=$name;StartTime=$begin.ToString('o');EndTime=$event.TimeCreated.ToString('o');DurationMinutes=[math]::Round($minutes,4)}}
+    }}
+  }}
+}}
+""".format(days=args.task_history_days)
+        runtime_rows = best_effort("scheduled-task-history", lambda: run_ps_json(event_query, timeout=180), failures)
+        if runtime_rows is not None:
+            if isinstance(runtime_rows, dict):
+                runtime_rows = [runtime_rows]
+            stable_csv(root / "scheduling" / "scheduled-task-runs.csv", runtime_rows)
 
     # Installed software from registry (Win32_Product intentionally avoided).
     software = best_effort("software.installed", lambda: run_ps_json(
@@ -673,6 +738,8 @@ def main() -> int:
     parser.add_argument("--output", default=os.environ.get("CONFIGBACKUP_OUTPUT"), help="Output directory (defaults to CONFIGBACKUP_OUTPUT)")
     parser.add_argument("--skip-firewall", action="store_true", help="Skip firewall rule/profile collection")
     parser.add_argument("--skip-accounts", action="store_true", help="Skip local users/groups inventory")
+    parser.add_argument("--include-task-history", action="store_true", help="Capture Windows Task Scheduler completed-run durations from Operational event log (volatile output)")
+    parser.add_argument("--task-history-days", type=int, default=60, help="Task Scheduler history lookback (default: 60 days)")
     parser.add_argument("--strict", action="store_true", help="Fail if any best-effort section cannot be collected")
     args = parser.parse_args()
     if not args.output:

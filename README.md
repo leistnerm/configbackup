@@ -16,6 +16,8 @@ It is designed to run once and exit, making it suitable for **Windows Task Sched
 - Optional cross-platform SQL Server collector using Microsoft SqlPackage + dbatools, including SQL Agent, SSIS inventory/export, conditional Availability Groups, and local SQL Server on Linux host configuration (`mssql.conf`, packages, systemd metadata).
 - Optional PostgreSQL collector using native `psql`/`pg_dump`/`pg_dumpall`, including safe cluster globals, schema/configuration inventory, logical replication metadata, and pg_cron/pgAgent.
 - Optional cross-platform guest-system collector for hardware, CPU/memory, storage layout, networking, services, scheduled tasks/timers, installed software/packages, patches, roles/features, drivers, accounts/groups, firewall configuration, and related operating-system state.
+- **Schedule analysis**: combine Windows Task Scheduler, SQL Agent, PostgreSQL pg_cron, cron, and common systemd timers into daily/weekly/monthly timelines, run-duration estimates, overlap reports and an offline HTML overview. Per-report exclusion rules suppress noisy watchdogs in selected views without deleting them from inventory.
+- Canonicalized SQL/PostgreSQL CSV serialization for more meaningful Git diffs; optional rolling run-history and capacity metrics are separated from stable configuration by default.
 - Optional Git storage backend: keep only the current snapshot in the working tree and use Git commits for history/diffs; works with GitHub, GitLab, Azure DevOps, local/bare remotes, or other Git servers.
 - Per-task `storage: filesystem | git | both`, so dated-file retention and Git history can be mixed within one configuration.
 - Command tasks can capture stdout directly into a versioned backup artifact.
@@ -58,6 +60,17 @@ Optional collectors have their own external prerequisites:
 See the collector-specific documentation for authentication and privileges.
 
 For Git/GitHub setup, including Windows Git Credential Manager, SSH/deploy keys, Linux credential stores, and unattended scheduling, see `docs/git-storage.md`.
+
+For schedule analysis and report-only exclusions, see [`docs/schedule-analysis.md`](docs/schedule-analysis.md), [`examples/schedule-report.yaml`](examples/schedule-report.yaml), and [`examples/full-stack-windows-schedule-analysis.yaml`](examples/full-stack-windows-schedule-analysis.yaml).
+
+To compare two collector snapshots and classify CSV ordering-only changes, run:
+
+```bash
+python collectors/common/compare_snapshots.py --before /path/run1 --after /path/run2
+```
+
+This compares outputs offline; no actual SQL Server/Windows/pg_cron runtime connectivity is needed for analysis. The SQL PowerShell and Windows collectors still require a live integration test on Windows/SQL Server for environment-specific behavior.
+
 
 ## Quick start
 

@@ -9,6 +9,7 @@ Start with the project-level `README.md` and `configbackup.example.yaml`, then u
 - `system-collector.md` — Windows/Linux guest hardware/storage/network/service/task/software/patch/share inventory.
 - `sql-server-collector.md` — SQL Server databases/schema, instance configuration, SQL Agent, SSISDB, and optional legacy SSIS.
 - `postgresql-collector.md` — PostgreSQL cluster globals, schema dumps, configuration/catalog inventory, replication, pg_cron, and pgAgent.
-- `scheduling.md` — Windows Task Scheduler, cron, and systemd timer examples.
+- `scheduling.md` — running ConfigBackup from Windows Task Scheduler, cron, and systemd timer.
+- `schedule-analysis.md` — cross-system task timelines, historical run durations, potential overlaps, and per-report exclusions.
 - `state-and-recovery.md` — internal state, run manifests, interruption/recovery behavior, and backup-state considerations.
 - `../SECURITY.md` — credentials, sensitive collected content, and destructive-operation safeguards.

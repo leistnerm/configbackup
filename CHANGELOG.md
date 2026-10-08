@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.5.0 (2026-10-08)
+
+- Audited collector determinism: SQL Server CSV output rows sorted by canonical serialized value regardless of SMO/SQL row enumeration; PostgreSQL CSV catalog rows and JSON-result arrays sorted deterministically. Existing DacFx name sorting and PostgreSQL native dump normalization remain intact. SQL/DDL text is never arbitrarily reordered.
+- SQL Server default file/database snapshots no longer include volatile used/free/percent-usage counters. Use `-IncludeCapacityMetrics` to export rolling file-space usage separately.
+- Optional observed scheduler durations: SQL Agent `-IncludeAgentHistory` / `-AgentHistoryDays`; Windows Task Scheduler `--include-task-history` / `--task-history-days`; PostgreSQL pg_cron `--include-scheduler-history`. These rolling history artifacts should normally be ignored in Git.
+- Added offline scheduling analysis for Windows Task Scheduler, SQL Agent, cron, pg_cron, and common systemd calendar timers. Outputs: `dashboard.html`, `jobs.csv`, `today.csv`, `daily.csv`, `weekly.csv`, `monthly.csv`, `daily-recurring.csv`, `timeline.csv`, `starts-by-hour.csv`, `overlaps.csv`, `exclusions.csv`, `warnings.csv`, `summary.json`.
+- Added per-report exclusions and separate watchdog/singleton suppression from overlap/load analysis without modifying underlying scheduler definitions or hiding jobs from inventory.
+- Added `collectors/common/compare_snapshots.py` for distinguishing CSV row-order churn from actual content changes in two collector snapshots.
+- Added schedule-analyzer docs, a standalone report YAML, a Windows integrated example, and regression tests.
+
+
+## 1.4.5 - 2026-09-26
+
+- SQL Server collector now retries `Export-DbaInstance` only when dbatools reports the transient SMO error `Database '...' is in transition. Try the statement later.`
+- Each failed transient attempt is discarded before retrying, so partially generated instance-export files are never accepted into the snapshot.
+- Added `-InstanceExportTransitionRetries` (default `3`) and `-InstanceExportTransitionDelaySeconds` (default `15`) for tuning the retry window.
+- When possible, the collector logs the transitioning database's current `sys.databases` state before waiting/retrying.
+- Non-transient `Export-DbaInstance` errors remain immediately fatal; an instance that stays in transition after all retries still fails the collector.
+
 ## 1.4.4 - 2026-09-24
 
 - Fixed GitHub pull-request automation so `gh pr list` / `gh pr create` no longer depend on the process current directory or on GitHub CLI inferring the repository from a temporary linked worktree.

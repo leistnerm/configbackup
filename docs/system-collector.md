@@ -174,3 +174,9 @@ For Git history instead of dated files:
 ## Security considerations
 
 System inventories can still be sensitive even without passwords. They can reveal machine names, network topology, service-account names, scheduled commands, installed software, firewall rules, and storage paths. Protect filesystem archives and Git repositories accordingly; use a private remote when pushing to a hosted Git provider.
+
+## Schedule analysis support (1.5.0)
+
+The Windows scheduled-task inventory now captures explicit weekly/monthly/calendar and repetition trigger properties, not just the trigger's type. To optionally obtain actual runtimes from the Task Scheduler Operational log, use `--include-task-history --task-history-days 60`. The 100/102 event pairs must be present and readable; otherwise duration remains unknown. Because `scheduling/scheduled-task-runs.csv` rolls each day, use a Git-only ignore if you're tracking stable configuration.
+
+On Linux, the collector also produces `scheduling/systemd-timers.csv` with stable `OnCalendar` and monotonic timer definitions for offline schedule analysis. The analyzer reports complex monotonic/event schedules as unknown rather than fabricating exact starts. See `docs/schedule-analysis.md`.

@@ -269,6 +269,25 @@ The collector uses `Export-DbaInstance` for broad instance-level configuration, 
 
 The dbatools instance-export phase runs with verbose progress enabled. If a dbatools component fails, ConfigBackup logs show the last component attempted plus the PowerShell error category, fully-qualified error ID, invocation position, and stack trace. Additional dbatools component types can be skipped with `-InstanceExclude`.
 
+### Transient database-state retries
+
+SMO/dbatools can occasionally abort a broad instance export while a database is changing state, even though `Databases` itself is excluded from `Export-DbaInstance`. A typical message is:
+
+```text
+Database 'ExampleDb' is in transition. Try the statement later.
+```
+
+The collector treats only that specific message as transient. By default it discards the partial dbatools temp export, waits 15 seconds, and retries up to three additional times. No partial instance-export files are copied into the snapshot. Other errors are not retried.
+
+Tune the behavior with:
+
+```powershell
+-InstanceExportTransitionRetries 3
+-InstanceExportTransitionDelaySeconds 15
+```
+
+Set retries to `0` to restore fail-immediately behavior. If the database remains in transition after the retry window, the collector fails normally so ConfigBackup does not archive an incomplete instance configuration.
+
 
 ## SQL Server on Linux
 
@@ -371,3 +390,21 @@ For advanced **non-secret** connection properties, use `-AppendConnectionString`
 
 Those properties are appended to the dbatools connection and, for SqlPackage extraction, the collector switches to `/SourceConnectionString`. Endpoint, database, authentication, timeout, encryption, certificate-trust, and credential-bearing keys are rejected; use the collector's explicit parameters for those settings and never put passwords/tokens in YAML.
 
+
+## Deterministic output and runtime history (1.5.0)
+
+Structured CSV reports now sort complete serialized rows at write time to avoid unstable SQL/SMO iteration order. DacFx schema extraction continues to use `/p:ScriptSortElementsByName=True`. Generated T-SQL/DDL is **not** generically sorted because statement order can be semantically important.
+
+Database `SizeMB`, `UsedSpaceMB`, `FreeSpaceMB`, `PercentUsed` and similar rapidly changing capacity counters are no longer included in the default configuration snapshots. For a separate opt-in usage report:
+
+```powershell
+-IncludeCapacityMetrics
+```
+
+For a rolling SQL Agent job-runtime report consumed by the new scheduling analyzer:
+
+```powershell
+-IncludeAgentHistory -AgentHistoryDays 60
+```
+
+This writes `instance/agent/job-runs.csv` with job-level execution times/durations. It changes as jobs run; add `**/job-runs.csv` to `git.ignore` (even when `storage: both` preserves the file in filesystem history). See `docs/schedule-analysis.md`.

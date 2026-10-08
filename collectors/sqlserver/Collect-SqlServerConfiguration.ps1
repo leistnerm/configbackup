@@ -14,7 +14,7 @@
     dbatools instance scripts by default.
 
 .NOTES
-    Collector version: 1.4.3
+    Collector version: 1.4.5
     Requires:
       - PowerShell 5.1+ (PowerShell 7+ recommended)
       - dbatools PowerShell module
@@ -50,7 +50,16 @@ param(
 
     [switch]$SkipSchema,
     [switch]$SkipInstanceExport,
+    # Include frequently-changing size/usage counters in an inventory-only file.
+    # Disabled by default to keep SQL configuration diffs meaningful.
+    [switch]$IncludeCapacityMetrics,
+
     [switch]$SkipInventory,
+    [switch]$IncludeAgentHistory,
+
+    [ValidateRange(1, 365)]
+    [int]$AgentHistoryDays = 60,
+
     [switch]$SkipAgent,
     [switch]$SkipSsis,
     [switch]$SkipIspac,
@@ -82,6 +91,15 @@ param(
     # credential-bearing keys are rejected because they are controlled explicitly.
     [string]$AppendConnectionString = '',
 
+    # Export-DbaInstance/SMO can fail transiently while a database is changing state
+    # (for example ONLINE/OFFLINE/RESTORE transitions). Retry only that specific
+    # error; all other instance-export failures remain immediately fatal.
+    [ValidateRange(0, 10)]
+    [int]$InstanceExportTransitionRetries = 3,
+
+    [ValidateRange(0, 300)]
+    [int]$InstanceExportTransitionDelaySeconds = 15,
+
     [ValidateRange(1, 600)]
     [int]$ConnectTimeout = 30
 )
@@ -90,7 +108,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$CollectorVersion = '1.4.3'
+$CollectorVersion = '1.5.0'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Write-CollectorMessage {
@@ -144,8 +162,16 @@ function Write-StableCsv {
         Write-Utf8Text -Path $Path -Text ''
         return
     }
-    $text = (@($rowsArray | ConvertTo-Csv -NoTypeInformation) -join "`n") + "`n"
-    Write-Utf8Text -Path $Path -Text $text
+    # Sort complete serialized rows, not object-property enumeration order.
+    # SQL metadata views and SMO collections may return equivalent sets in
+    # arbitrary orders on successive runs. Do NOT reorder T-SQL scripts.
+    $csvLines = @($rowsArray | ConvertTo-Csv -NoTypeInformation)
+    if ($csvLines.Count -lt 2) { return Write-Utf8Text -Path $Path -Text (($csvLines -join "`n") + "`n") }
+    $header = $csvLines[0]
+    $body = @($csvLines | Select-Object -Skip 1)
+    [array]::Sort($body, [System.StringComparer]::Ordinal)
+    $sortedCsv = @($header) + $body
+    Write-Utf8Text -Path $Path -Text (($sortedCsv -join "`n") + "`n")
 }
 
 function Get-ObjectPropertyValue {
@@ -258,7 +284,6 @@ function Get-DatabaseMetadata {
         Collation                  = Convert-ToStableString (Get-ObjectPropertyValue $DatabaseObject 'Collation')
         Owner                      = Convert-ToStableString (Get-ObjectPropertyValue $DatabaseObject 'Owner')
         CreateDate                 = Convert-ToStableString (Get-ObjectPropertyValue $DatabaseObject 'CreateDate')
-        SizeMB                     = Convert-ToInvariantNumber (Get-ObjectPropertyValue $DatabaseObject 'Size')
         UserAccess                 = Convert-ToStableString (Get-ObjectPropertyValue $DatabaseObject 'UserAccess')
         ReadOnly                   = Convert-ToStableString (Get-ObjectPropertyValue $DatabaseObject 'ReadOnly')
         AutoClose                  = Convert-ToStableString (Get-ObjectPropertyValue $DatabaseObject 'AutoClose')
@@ -301,15 +326,9 @@ function Convert-SpaceRows {
             PhysicalName           = Convert-ToStableString (Get-ObjectPropertyValue $space 'PhysicalName')
             FileType               = Convert-ToStableString (Get-ObjectPropertyValue $space 'FileType')
             FileSizeMB             = Get-SizeMegabytes (Get-ObjectPropertyValue $space 'FileSize')
-            UsedSpaceMB            = Get-SizeMegabytes (Get-ObjectPropertyValue $space 'UsedSpace')
-            FreeSpaceMB            = Get-SizeMegabytes (Get-ObjectPropertyValue $space 'FreeSpace')
-            PercentUsed            = Convert-ToInvariantNumber (Get-ObjectPropertyValue $space 'PercentUsed')
             AutoGrowthType         = Convert-ToStableString (Get-ObjectPropertyValue $space 'AutoGrowType')
             AutoGrowthMB           = Get-SizeMegabytes (Get-ObjectPropertyValue $space 'AutoGrowth')
             AutoGrowthDisplay      = Convert-ToStableString (Get-ObjectPropertyValue $space 'AutoGrowth')
-            SpaceUntilMaxSizeMB    = Get-SizeMegabytes (Get-ObjectPropertyValue $space 'SpaceUntilMaxSize')
-            AutoGrowthPossibleMB   = Get-SizeMegabytes (Get-ObjectPropertyValue $space 'AutoGrowthPossible')
-            UnusableSpaceMB        = Get-SizeMegabytes (Get-ObjectPropertyValue $space 'UnusableSpace')
         }
     }
     return @($rows | Sort-Object Database, FileType, FileName)
@@ -530,6 +549,68 @@ function Export-AvailabilityGroupConfiguration {
     }
 }
 
+function Get-TransitionDatabaseName {
+    param([Parameter(Mandatory = $true)]$ErrorRecord)
+
+    $parts = @()
+    if ($null -ne $ErrorRecord.Exception) {
+        $parts += [string]$ErrorRecord.Exception.Message
+        $parts += [string]$ErrorRecord.Exception.ToString()
+    }
+    $parts += [string]$ErrorRecord
+    $text = $parts -join "`n"
+    $match = [regex]::Match(
+        $text,
+        "(?i)Database\s+'([^']+)'\s+is in transition\.\s*Try the statement later\."
+    )
+    if (-not $match.Success) { return $null }
+    return $match.Groups[1].Value
+}
+
+function Write-TransitionDatabaseState {
+    param(
+        [Parameter(Mandatory = $true)]$ServerObject,
+        [Parameter(Mandatory = $true)][string]$DatabaseName
+    )
+
+    try {
+        $databaseLiteral = Get-SqlLiteral $DatabaseName
+        $table = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'master' -Query @"
+SELECT
+    name,
+    state_desc,
+    user_access_desc,
+    is_read_only,
+    is_in_standby
+FROM sys.databases
+WHERE name = $databaseLiteral;
+"@
+        if ($null -eq $table -or $table.Rows.Count -eq 0) {
+            Write-CollectorMessage "Transitioning database '$DatabaseName' is not currently visible in sys.databases"
+            return
+        }
+        $row = $table.Rows[0]
+        Write-CollectorMessage (
+            "Transitioning database state: name={0} state={1} user_access={2} read_only={3} standby={4}" -f
+            [string]$row['name'],
+            [string]$row['state_desc'],
+            [string]$row['user_access_desc'],
+            [string]$row['is_read_only'],
+            [string]$row['is_in_standby']
+        )
+    }
+    catch {
+        Write-CollectorMessage "Unable to query current state for transitioning database '$DatabaseName': $($_.Exception.Message)"
+    }
+}
+
+function Clear-InstanceExportTempRoot {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 function Export-InstanceConfiguration {
     param(
         [Parameter(Mandatory = $true)]$ServerObject,
@@ -566,24 +647,64 @@ function Export-InstanceConfiguration {
             Verbose         = $true
         }
 
-        try {
-            $files = @(Export-DbaInstance @exportArgs)
-        }
-        catch {
-            Write-CollectorError ("Export-DbaInstance failed: {0}" -f $_.Exception.Message)
-            if ($null -ne $_.CategoryInfo) {
-                Write-CollectorError ("Category: {0}" -f $_.CategoryInfo.ToString())
+        $files = @()
+        $maxAttempts = 1 + $InstanceExportTransitionRetries
+        for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+            Clear-InstanceExportTempRoot -Path $tempRoot
+            try {
+                if ($maxAttempts -gt 1) {
+                    Write-CollectorMessage "Export-DbaInstance attempt $attempt of $maxAttempts"
+                }
+                $files = @(Export-DbaInstance @exportArgs)
+                break
             }
-            if (-not [string]::IsNullOrWhiteSpace($_.FullyQualifiedErrorId)) {
-                Write-CollectorError ("FullyQualifiedErrorId: {0}" -f $_.FullyQualifiedErrorId)
+            catch {
+                $transitionDatabase = Get-TransitionDatabaseName -ErrorRecord $_
+                $canRetryTransition = (
+                    -not [string]::IsNullOrWhiteSpace($transitionDatabase) -and
+                    $attempt -lt $maxAttempts
+                )
+
+                if ($canRetryTransition) {
+                    Write-CollectorMessage (
+                        "Transient database transition detected during instance export: '{0}'. " +
+                        "Discarding partial output and retrying in {1} second(s) ({2}/{3})." -f
+                        $transitionDatabase,
+                        $InstanceExportTransitionDelaySeconds,
+                        $attempt,
+                        $maxAttempts
+                    )
+                    Write-TransitionDatabaseState -ServerObject $ServerObject -DatabaseName $transitionDatabase
+                    try { $ServerObject.Databases.Refresh() } catch { }
+                    if ($InstanceExportTransitionDelaySeconds -gt 0) {
+                        Start-Sleep -Seconds $InstanceExportTransitionDelaySeconds
+                    }
+                    continue
+                }
+
+                Write-CollectorError ("Export-DbaInstance failed: {0}" -f $_.Exception.Message)
+                if (-not [string]::IsNullOrWhiteSpace($transitionDatabase)) {
+                    Write-CollectorError (
+                        "Database '{0}' remained in transition after {1} attempt(s)." -f
+                        $transitionDatabase,
+                        $attempt
+                    )
+                    Write-TransitionDatabaseState -ServerObject $ServerObject -DatabaseName $transitionDatabase
+                }
+                if ($null -ne $_.CategoryInfo) {
+                    Write-CollectorError ("Category: {0}" -f $_.CategoryInfo.ToString())
+                }
+                if (-not [string]::IsNullOrWhiteSpace($_.FullyQualifiedErrorId)) {
+                    Write-CollectorError ("FullyQualifiedErrorId: {0}" -f $_.FullyQualifiedErrorId)
+                }
+                if ($null -ne $_.InvocationInfo -and -not [string]::IsNullOrWhiteSpace($_.InvocationInfo.PositionMessage)) {
+                    Write-CollectorError $_.InvocationInfo.PositionMessage.Trim()
+                }
+                if (-not [string]::IsNullOrWhiteSpace($_.ScriptStackTrace)) {
+                    Write-CollectorError $_.ScriptStackTrace
+                }
+                throw
             }
-            if ($null -ne $_.InvocationInfo -and -not [string]::IsNullOrWhiteSpace($_.InvocationInfo.PositionMessage)) {
-                Write-CollectorError $_.InvocationInfo.PositionMessage.Trim()
-            }
-            if (-not [string]::IsNullOrWhiteSpace($_.ScriptStackTrace)) {
-                Write-CollectorError $_.ScriptStackTrace
-            }
-            throw
         }
 
         $fileInfos = @($files | Where-Object { $_ -is [System.IO.FileInfo] -and $_.Exists } | Sort-Object Name, FullName)
@@ -1322,6 +1443,8 @@ try {
         VerifySchemaExtraction = [bool]$VerifySchemaExtraction
         SortSchemaElementsByName = (-not [bool]$DisableSchemaElementSorting)
         InstanceExport        = (-not $SkipInstanceExport)
+        InstanceExportTransitionRetries = $InstanceExportTransitionRetries
+        InstanceExportTransitionDelaySeconds = $InstanceExportTransitionDelaySeconds
         Inventory             = (-not $SkipInventory)
         PasswordMaterial      = 'excluded'
         SqlAgent               = (-not $SkipAgent)
@@ -1367,6 +1490,18 @@ try {
             @()
         }
         $allSpaceRows = @(Convert-SpaceRows -SpaceObjects $spaceObjects)
+        if ($IncludeCapacityMetrics) {
+            $capacityRows = foreach ($space in @($spaceObjects)) {
+                [pscustomobject][ordered]@{
+                    Database = Convert-ToStableString (Get-ObjectPropertyValue $space 'Database')
+                    FileName = Convert-ToStableString (Get-ObjectPropertyValue $space 'FileName')
+                    UsedSpaceMB = Get-SizeMegabytes (Get-ObjectPropertyValue $space 'UsedSpace')
+                    FreeSpaceMB = Get-SizeMegabytes (Get-ObjectPropertyValue $space 'FreeSpace')
+                    PercentUsed = Convert-ToInvariantNumber (Get-ObjectPropertyValue $space 'PercentUsed')
+                }
+            }
+            Write-StableCsv -Path (Join-Path $instanceDirectory 'capacity-usage.csv') -Rows @($capacityRows)
+        }
 
         foreach ($db in $databases) {
             $metadata = Get-DatabaseMetadata -DatabaseObject $db
@@ -1391,6 +1526,22 @@ try {
 
     if (-not $SkipAgent) {
         Export-SqlAgentConfiguration -ServerObject $server -TargetDirectory (Join-Path $instanceDirectory 'agent')
+        if ($IncludeAgentHistory) {
+            # step_id=0 identifies the entire job execution (not each step).
+            # Run date/time and duration are kept as raw SQL Agent integers;
+            # schedule analyzer decodes HHMMSS even when hours exceed 23.
+            $historyQuery = @"
+SELECT TOP (20000)
+    j.name AS job_name,
+    h.run_date, h.run_time, h.run_duration, h.run_status
+FROM msdb.dbo.sysjobhistory AS h
+JOIN msdb.dbo.sysjobs AS j ON h.job_id=j.job_id
+WHERE h.step_id=0
+  AND h.run_date >= CONVERT(int, CONVERT(varchar(8), DATEADD(day, -$AgentHistoryDays, GETDATE()), 112))
+ORDER BY j.name, h.run_date DESC, h.run_time DESC, h.instance_id DESC;
+"@
+            Write-StableCsv -Path (Join-Path $instanceDirectory 'agent/job-runs.csv') -Rows (Convert-DataTableRows (Invoke-QueryTable -ServerObject $server -DatabaseName 'msdb' -Query $historyQuery))
+        }
     }
 
     if (-not $SkipSsis) {

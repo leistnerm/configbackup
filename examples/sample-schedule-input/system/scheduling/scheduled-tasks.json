@@ -1,0 +1,37 @@
+[
+  {
+    "TaskPath": "\\Maintenance\\",
+    "TaskName": "Restart Watchdog",
+    "Settings": {
+      "Enabled": true
+    },
+    "Triggers": [
+      {
+        "Enabled": true,
+        "StartBoundary": "2026-10-08T00:00:00",
+        "CimClass": "MSFT_TaskDailyTrigger",
+        "DaysInterval": 1,
+        "Repetition": {
+          "Interval": "PT5M",
+          "Duration": "PT30M"
+        }
+      }
+    ]
+  },
+  {
+    "TaskPath": "\\Maintenance\\",
+    "TaskName": "Disk Cleanup",
+    "Settings": {
+      "Enabled": true
+    },
+    "Triggers": [
+      {
+        "Enabled": true,
+        "StartBoundary": "2026-10-08T01:00:00",
+        "CimClass": "MSFT_TaskDailyTrigger",
+        "DaysInterval": 1,
+        "Repetition": {}
+      }
+    ]
+  }
+]

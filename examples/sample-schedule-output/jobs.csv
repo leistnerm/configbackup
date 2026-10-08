@@ -1,0 +1,4 @@
+job_id,source,job,cadence,schedule,runs_in_horizon,measured_runs,median_minutes,p95_minutes,duration_source,watchdog,excluded_from_load,note
+sql_agent:SQL01:Nightly ETL,sql_agent,Nightly ETL,daily,Nightly,35,2,70.0,80.0,observed,False,False,
+windows:\Maintenance\Disk Cleanup,windows,\Maintenance\Disk Cleanup,daily,Trigger 1: MSFT_TaskDailyTrigger,35,2,40.0,45.0,observed,False,False,
+windows:\Maintenance\Restart Watchdog,windows,\Maintenance\Restart Watchdog,daily,Trigger 1: MSFT_TaskDailyTrigger,210,0,,,unknown,False,False,

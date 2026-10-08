@@ -1,0 +1,32 @@
+# Schedule analyzer settings. REPORT-ONLY: does not change/disable any actual job.
+# IDs are case-insensitive and support * and ? wildcards.
+# To identify exact IDs, generate reports once and open schedules/jobs.csv.
+
+reports:
+  # This watchdog launches every five minutes but exits if a mutex indicates
+  # another copy is running. Omit it from the daily view only.
+  daily:
+    exclude:
+      - 'windows:*\My Five Minute Restart Task'
+  # Keep it in the overall timeline if useful, but exclude from overlaps.
+  overlaps:
+    exclude:
+      - 'windows:*\My Five Minute Restart Task'
+  weekly:
+    exclude: []
+  monthly:
+    exclude: []
+  timeline:
+    exclude: []
+
+analysis:
+  # Optional: jobs classified as singleton/watchdog aren't used in load charts
+  # or overlap estimation but are still listed in jobs.csv and timeline.csv.
+  # watchdogs:
+  #   - 'windows:*\My Five Minute Restart Task'
+
+  # Jobs without duration histories have unknown runtime, not zero.
+  # You can override estimates where you have reliable external measurements:
+  duration_overrides_minutes:
+    # 'sql_agent:SQL01:Nightly Reporting Refresh': 90
+    # 'windows:*\Some Full Backup': 45
