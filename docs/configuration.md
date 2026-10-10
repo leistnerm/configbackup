@@ -1,3 +1,5 @@
+> **1.6.0:** [Migration, changed behavior, new options, and limitations](release-1.6.0.md) supersede older descriptions below, especially collector failure handling, telemetry paths, and time zones.
+
 # Configuration reference
 
 ## Top-level sections

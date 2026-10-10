@@ -52,6 +52,7 @@ tasks:
   # should be excluded from Git via git.ignore if storage is changed to both.
   - name: archive-system
     type: directory
+    collection_manifest: true
     source: ${SYSTEM_STAGING}
     destination: system
     depends_on: [collect-system]
@@ -59,6 +60,8 @@ tasks:
 
   - name: archive-sql
     type: directory
+    collection_manifest: true
+    git_canonicalize: true
     source: ${SQL_STAGING}
     destination: sql
     depends_on: [collect-sql]
@@ -90,6 +93,7 @@ tasks:
     required: true
 
   - name: archive-schedule-report
+    required: false
     type: directory
     source: ${SCHEDULE_STAGING}
     destination: schedule-analysis

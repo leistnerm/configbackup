@@ -30,7 +30,10 @@ import sys
 from pathlib import Path
 from typing import Any, Iterable
 
-COLLECTOR_VERSION = "1.5.0"
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from completeness import publish, section
+
+COLLECTOR_VERSION = "1.6.0"
 
 
 class CollectorError(RuntimeError):
@@ -45,7 +48,17 @@ def warn(message: str) -> None:
     print(f"[postgresql-collector] WARNING: {message}", file=sys.stderr)
 
 
+_OUTPUT_NAMES = {}
+def check_output_name(path: Path) -> None:
+    original = str(path.absolute())
+    key = original.casefold()
+    if key in _OUTPUT_NAMES and _OUTPUT_NAMES[key] != original:
+        raise CollectorError('Case-colliding output paths cannot be safely archived: ' + path.name)
+    _OUTPUT_NAMES[key] = original
+
+
 def stable_text(path: Path, text: str) -> None:
+    check_output_name(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     if text and not text.endswith("\n"):
@@ -54,6 +67,7 @@ def stable_text(path: Path, text: str) -> None:
 
 
 def stable_json(path: Path, value: Any) -> None:
+    check_output_name(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False, default=str) + "\n",
@@ -75,6 +89,7 @@ def normalize_scalar(value: Any) -> Any:
 
 def stable_csv(path: Path, rows: Iterable[dict[str, Any]], fieldnames: list[str] | None = None) -> None:
     rows = list(rows)
+    check_output_name(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     if fieldnames is None:
         keys: set[str] = set()
@@ -270,10 +285,10 @@ class PgTools:
             args.append("--no-subscriptions")
         if "--restrict-key" in dump_help:
             # PostgreSQL documents this specifically for repeatable/comparable dumps.
-            args.append("--restrict-key=ConfigBackup")
+            pass  # Preserve the native random safety key; canonicalize only comparison copies.
         args.extend(["--dbname", database])
         cp = self.run("pg_dump", args, timeout=self.args.dump_timeout)
-        return normalize_dump(cp.stdout)
+        return cp.stdout
 
     def table_predata_dump(self, database: str, schema: str, table: str) -> str:
         pattern = f"{quote_ident_pattern(schema)}.{quote_ident_pattern(table)}"
@@ -289,10 +304,10 @@ class PgTools:
             pattern,
         ]
         if "--restrict-key" in self.help("pg_dump"):
-            args.append("--restrict-key=ConfigBackup")
+            pass  # Preserve the native random safety key; canonicalize only comparison copies.
         args.extend(["--dbname", database])
         cp = self.run("pg_dump", args, timeout=self.args.dump_timeout)
-        return normalize_dump(cp.stdout)
+        return cp.stdout
 
     def globals_dump(self) -> str:
         help_text = self.help("pg_dumpall")
@@ -302,10 +317,10 @@ class PgTools:
             )
         args = ["-w", "--globals-only", "--no-role-passwords", "--quote-all-identifiers"]
         if "--restrict-key" in help_text:
-            args.append("--restrict-key=ConfigBackup")
+            pass  # Preserve the native random safety key; canonicalize only comparison copies.
         args.extend(["--database", self.args.maintenance_db])
         cp = self.run("pg_dumpall", args, timeout=self.args.dump_timeout)
-        return normalize_dump(cp.stdout)
+        return cp.stdout
 
 
 def record_optional(
@@ -412,7 +427,7 @@ def collect_cluster(tools: PgTools, root: Path, maintenance_db: str, failures: l
                d.datallowconn AS allow_connections,
                d.datconnlimit AS connection_limit,
                COALESCE(t.spcname, '') AS tablespace,
-               d.datacl::text AS acl
+               CASE WHEN d.datacl IS NULL THEN NULL ELSE ARRAY(SELECT x::text FROM unnest(d.datacl) x ORDER BY x::text)::text END AS acl
         FROM pg_database d
         LEFT JOIN pg_tablespace t ON t.oid = d.dattablespace
         ORDER BY d.datname
@@ -462,7 +477,7 @@ def collect_cluster(tools: PgTools, root: Path, maintenance_db: str, failures: l
                pg_get_userbyid(t.spcowner) AS owner,
                pg_tablespace_location(t.oid) AS location,
                t.spcoptions::text AS options,
-               t.spcacl::text AS acl
+               CASE WHEN t.spcacl IS NULL THEN NULL ELSE ARRAY(SELECT x::text FROM unnest(t.spcacl) x ORDER BY x::text)::text END AS acl
         FROM pg_tablespace t
         ORDER BY t.spcname
         """,
@@ -480,7 +495,7 @@ def collect_cluster(tools: PgTools, root: Path, maintenance_db: str, failures: l
             maintenance_db,
             """
             SELECT name, setting, unit, category, context, vartype, source,
-                   sourcefile, sourceline, pending_restart
+                   sourcefile, sourceline
             FROM pg_settings
             ORDER BY name
             """,
@@ -586,7 +601,7 @@ def collect_cluster(tools: PgTools, root: Path, maintenance_db: str, failures: l
             ),
         )
         if sizes is not None:
-            stable_csv(root / "inventory" / "database-sizes.csv", sizes)
+            stable_csv(root / "telemetry" / "database-sizes.csv", sizes)
 
     if args.include_raw_config_files:
         copy_raw_config_files(root, server, file_settings or [], failures)
@@ -868,13 +883,19 @@ def collect_schedulers(tools: PgTools, db: str, db_root: Path, failures: list[di
                     """),
                 )
                 if history is not None:
-                    stable_csv(db_root / "schedulers" / "pg-cron-runs.csv", history)
+                    stable_csv(db_root.parents[1] / "telemetry" / db_root.name / "pg-cron-runs.csv", history)
 
     if "pgagent" in extnames:
+        if getattr(tools.args, "include_scheduler_history", False):
+            rows = record_optional(failures, f"database.{db}.pgagent.history", lambda: tools.psql_rows(db,
+                "SELECT jlgid,jlgjobid,jlgstatus,jlgstart,EXTRACT(epoch FROM jlgduration) AS duration_seconds FROM pgagent.pga_joblog WHERE jlgstart >= now()-interval '60 days' ORDER BY jlgstart DESC LIMIT 20000"))
+            if rows is not None:
+                stable_csv(db_root.parents[1] / 'telemetry' / db_root.name / 'pgagent-runs.csv', rows)
         for table, out_name in [
             ("pga_job", "jobs.csv"),
             ("pga_jobstep", "job-steps.csv"),
             ("pga_schedule", "schedules.csv"),
+            ("pga_exception", "exceptions.csv"),
             ("pga_jobclass", "job-classes.csv"),
         ]:
             rows = record_optional(
@@ -889,9 +910,9 @@ def collect_schedulers(tools: PgTools, db: str, db_root: Path, failures: list[di
                 clean = {}
                 for key, value in row.items():
                     lower = key.lower()
-                    if lower in {"joblastrun", "jobnextrun", "jobchanged", "jscnextrun"}:
+                    if lower in {"joblastrun", "jobnextrun", "jobchanged", "jscnextrun", "jobagentid", "joblastresult"}:
                         continue
-                    clean[key] = redact_text(value, name=key)
+                    clean[key] = json.dumps(value, separators=(',', ':')) if isinstance(value, list) else redact_text(value, name=key)
                 sanitized.append(clean)
             stable_csv(db_root / "schedulers" / "pgagent" / out_name, sanitized)
 
@@ -928,7 +949,7 @@ def collect_database(tools: PgTools, row: dict[str, Any], root: Path, server_ver
         db_root,
         "inventory/schemas.csv",
         """
-        SELECT n.nspname AS schema_name, pg_get_userbyid(n.nspowner) AS owner, n.nspacl::text AS acl
+        SELECT n.nspname AS schema_name, pg_get_userbyid(n.nspowner) AS owner, CASE WHEN n.nspacl IS NULL THEN NULL ELSE ARRAY(SELECT x::text FROM unnest(n.nspacl) x ORDER BY x::text)::text END AS acl
         FROM pg_namespace n
         WHERE n.nspname !~ '^pg_toast'
         ORDER BY n.nspname
@@ -1160,12 +1181,28 @@ def collect_database(tools: PgTools, row: dict[str, Any], root: Path, server_ver
             ),
         )
         if relation_sizes is not None:
-            stable_csv(db_root / "inventory" / "relation-sizes.csv", relation_sizes)
+            stable_csv(root / "telemetry" / safe_db / "relation-sizes.csv", relation_sizes)
 
+    query_and_write(tools, db, db_root, 'inventory/table-grants.csv',
+        "SELECT grantor,grantee,table_catalog,table_schema,table_name,privilege_type,is_grantable,with_hierarchy FROM information_schema.table_privileges ORDER BY table_schema,table_name,grantee,privilege_type,grantor", failures, f'database.{db}.table_grants')
+    query_and_write(tools, db, db_root, 'inventory/column-grants.csv',
+        "SELECT grantor,grantee,table_schema,table_name,column_name,privilege_type,is_grantable FROM information_schema.column_privileges ORDER BY table_schema,table_name,column_name,grantee,privilege_type", failures, f'database.{db}.column_grants')
+    query_and_write(tools, db, db_root, 'inventory/dependencies.csv',
+        "SELECT pg_describe_object(classid,objid,objsubid) AS object_identity, pg_describe_object(refclassid,refobjid,refobjsubid) AS referenced_identity, deptype FROM pg_depend WHERE objid IN (SELECT oid FROM pg_class WHERE relnamespace IN (SELECT oid FROM pg_namespace WHERE nspname NOT IN ('pg_catalog','information_schema') AND nspname !~ '^pg_toast')) ORDER BY 1,2,3", failures, f'database.{db}.dependencies')
     collect_object_files(tools, db, db_root, server_version_num, failures, args)
     if not args.skip_schedulers:
         collect_schedulers(tools, db, db_root, failures)
 
+    if getattr(args, 'include_performance', False):
+        telemetry_failures=[]
+        queries={'database-stats': 'SELECT datname,numbackends,xact_commit,xact_rollback,blks_read,blks_hit,temp_bytes,deadlocks,blk_read_time,blk_write_time,stats_reset FROM pg_stat_database WHERE datname=current_database()'}
+        if server_version_num>=160000:queries['io']='SELECT * FROM pg_stat_io'
+        extension=record_optional(telemetry_failures,'pg_stat_statements.detect',lambda: tools.psql_rows(db,"SELECT extname FROM pg_extension WHERE extname='pg_stat_statements'"))
+        if extension:queries['statements']='SELECT userid,dbid,queryid,calls,rows,shared_blks_hit,shared_blks_read,shared_blks_written,temp_blks_read,temp_blks_written FROM pg_stat_statements'
+        for name,query in queries.items():
+            rows=record_optional(telemetry_failures,name,lambda q=query:tools.psql_rows(db,q))
+            if rows is not None:stable_csv(root/'telemetry'/safe_db/(name+'.csv'),rows)
+        stable_json(root/'telemetry'/safe_db/'collection-status.json',{'failures':telemetry_failures})
     return {"database": db, "directory": safe_db}
 
 
@@ -1189,6 +1226,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--split-table-ddl", action="store_true", help="Also run pg_dump pre-data per table (more expensive)")
     parser.add_argument("--skip-schedulers", action="store_true", help="Skip pg_cron/pgAgent discovery")
     parser.add_argument("--include-scheduler-history", action="store_true", help="Export rolling pg_cron run durations (volatile; keep out of Git history)")
+    parser.add_argument("--include-performance", action="store_true", help="Collect optional volatile statistics outside configuration manifests")
     parser.add_argument("--include-sizes", action="store_true", help="Include volatile database/relation size inventories")
     parser.add_argument(
         "--include-raw-config-files",
@@ -1211,12 +1249,25 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     root = Path(output_value).expanduser().absolute()
     root.mkdir(parents=True, exist_ok=True)
+    if any(root.iterdir()):
+        print("ERROR: Output directory must be empty; use clean_output: true", file=sys.stderr)
+        return 1
+    publish(root, [], finalized=False)
+    sections = []
 
     failures: list[dict[str, str]] = []
     tools = PgTools(args)
     try:
         tool_versions = {name: tools.version(name) for name in ("psql", "pg_dump", "pg_dumpall")}
+        visibility = tools.psql_rows(args.maintenance_db, "SELECT rolsuper FROM pg_roles WHERE rolname=current_user")
+        if not visibility or str(visibility[0]['rolsuper']).lower() not in ('true','t','1'):
+            raise CollectorError('Superuser visibility is required to certify full configuration; partial privileges can hide objects')
         server, db_rows = collect_cluster(tools, root, args.maintenance_db, failures, args)
+        for child in sorted(root.iterdir()):
+            if child.name in ('collection-manifest.json', 'telemetry'):
+                continue
+            sections.append(section(root, child.name, 'failed' if failures else 'complete',
+                                    'Cluster optional query failed' if failures else ''))
         server_version_num = int(server.get("server_version_num") or 0)
         selected = select_databases(db_rows, args)
         if not selected:
@@ -1226,10 +1277,21 @@ def main(argv: list[str] | None = None) -> int:
         for row in selected:
             db = str(row["database_name"])
             info(f"Collecting database {db}")
-            # The schema dump and core extension inventory are required. If either
-            # fails, abort the collector so ConfigBackup never archives a partial
-            # snapshot as if objects were deleted.
-            database_map.append(collect_database(tools, row, root, server_version_num, failures, args))
+            before = len(failures)
+            scope = "databases/" + safe_path_segment(db)
+            try:
+                database_map.append(collect_database(tools, row, root, server_version_num, failures, args))
+            except Exception as exc:
+                failures.append({'section': scope, 'error': str(exc), 'required': 'true'})
+                warn(f"{db}: {exc}; previous archived database preserved")
+            failed = len(failures) != before
+            if failed:
+                sections.append(section(root, scope, 'failed', 'Database collection incomplete'))
+            else:
+                # Child scopes protect intentionally skipped schema/object/scheduler sections.
+                for child in sorted((root / scope).iterdir()):
+                    sections.append(section(root, child.relative_to(root).as_posix()))
+            publish(root, sections, finalized=False)
         stable_csv(root / "database-map.csv", database_map)
 
         collector_meta = {
@@ -1251,8 +1313,11 @@ def main(argv: list[str] | None = None) -> int:
             "warnings": failures,
         }
         stable_json(root / "collector.json", collector_meta)
-        info(f"Collected {len(database_map)} database(s) into {root}")
-        return 0
+        sections.append(section(root, 'database-map.csv'))
+        sections.append(section(root, 'collector.json'))
+        publish(root, sections)
+        info(f"Collected {len(database_map)} database(s) into {root}; {len(failures)} warning(s)")
+        return 6 if failures else 0
     except KeyboardInterrupt:
         return 130
     except Exception as exc:

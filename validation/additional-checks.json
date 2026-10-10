@@ -1,0 +1,12 @@
+{
+  "sql_encrypted_module": "failed affected database; healthy databases completed",
+  "sql_limited_visibility": "failed affected scope; test login cleaned up after connection closed",
+  "postgresql_limited_visibility": "refused certification; unfinished manifest",
+  "missing_sqlpackage": "database failed, instance configuration catalog complete",
+  "ssas_wsfc_missing_modules": "finalized failed scopes, exit 6; no live service validation",
+  "postgresql_native_rich_restore": "separate server restore passed; policy, partition and overloaded functions checked",
+  "linux_host_collector": "finalized successful collection in minimal Linux container; no full systemd-host validation",
+  "macos_host_collector": "partial; sandbox denied hardware/accounts/crontab, launchd collected",
+  "powershell_syntax": "all packaged .ps1 files parsed successfully",
+  "yaml": "all packaged YAML parsed successfully"
+}

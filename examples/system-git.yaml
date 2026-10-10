@@ -32,6 +32,7 @@ tasks:
 
   - name: system-git-snapshot
     type: directory
+    collection_manifest: true
     source: ${SYSTEM_STAGING}
     destination: current
     depends_on: [collect-system]

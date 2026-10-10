@@ -139,7 +139,7 @@ tasks:
             "tasks": [],
         }
         engine = cb.BackupEngine(cfg, dry_run=True)
-        now = cb.now_local()
+        now = dt.datetime(2026, 9, 21, 12, tzinfo=dt.timezone.utc)
         versions = []
         for days in [10, 11, 12, 20]:
             created = now - dt.timedelta(days=days)
@@ -154,7 +154,9 @@ tasks:
                 ],
             }
         })["active"]
-        candidates = engine._retention_candidates({"x": versions}, policy)
+        from unittest.mock import patch
+        with patch.object(cb, "now_local", return_value=now):
+            candidates = engine._retention_candidates({"x": versions}, policy)
         # At least one older version in a shared weekly bucket should be removable.
         self.assertGreaterEqual(len(candidates), 1)
 
@@ -214,7 +216,7 @@ tasks:
             deleted = subprocess.check_output(["git", "-C", str(base / "repo"), "show", "--name-status", "--format=", "HEAD"], text=True)
             self.assertIn("D", deleted)
 
-    def test_git_snapshot_rolls_back_when_required_task_fails(self):
+    def test_git_snapshot_commits_healthy_task_when_other_required_task_fails(self):
         import subprocess
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
@@ -253,10 +255,10 @@ tasks:
                 rc = cb.BackupEngine(cfg).run()
             self.assertEqual(rc, 4)
             repo = base / "repo"
-            self.assertFalse((repo / "copied" / "app.conf").exists())
+            self.assertTrue((repo / "copied" / "app.conf").exists())
             status = subprocess.check_output(["git", "-C", str(repo), "status", "--porcelain"], text=True).strip()
             self.assertEqual(status, "")
-            self.assertNotEqual(subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "HEAD"], stdout=subprocess.PIPE, stderr=subprocess.PIPE).returncode, 0)
+            self.assertEqual(subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "HEAD"], stdout=subprocess.PIPE, stderr=subprocess.PIPE).returncode, 0)
 
     def test_git_repository_is_excluded_from_source_traversal(self):
         with tempfile.TemporaryDirectory() as td:

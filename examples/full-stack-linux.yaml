@@ -51,6 +51,7 @@ tasks:
 
   - name: system-history
     type: directory
+    collection_manifest: true
     source: ${SYSTEM_STAGING}
     destination: system
     depends_on: [collect-system]
@@ -75,6 +76,8 @@ tasks:
 
   - name: sql-history
     type: directory
+    collection_manifest: true
+    git_canonicalize: true
     source: ${SQL_STAGING}
     destination: sql
     depends_on: [collect-sql]

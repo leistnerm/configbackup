@@ -1,0 +1,15 @@
+# Merge this task into the configuration that defines collect-sql.
+# Telemetry is intentionally outside the collector configuration manifest/Git.
+tasks:
+  - name: sql-performance-history
+    type: directory
+    source: '${CONFIGBACKUP_STAGING}/sql/telemetry'
+    destination: telemetry/sql
+    depends_on: [collect-sql]
+    storage: filesystem
+    required: false
+    deletion:
+      enabled: false
+# Requires -IncludePerformanceMetrics / -IncludeCapacityMetrics on collect-sql.
+# A partial collector does not satisfy this ordinary dependency; telemetry then
+# stays unchanged. It never relaxes the manifest rules on configuration tasks.

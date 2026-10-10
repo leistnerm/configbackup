@@ -1,3 +1,5 @@
+> **1.6.0:** [Migration, changed behavior, new options, and limitations](release-1.6.0.md) supersede older descriptions below, especially collector failure handling, telemetry paths, and time zones.
+
 # Schedule inventory, timelines, and overlap analysis
 
 This is a **separate, read-only analyzer** built on ConfigBackup collector snapshots. It does **not** connect to databases or change task definitions. Run the system/SQL/PostgreSQL collectors first, then call `collectors/schedule/analyze_schedules.py` on their generated directories.

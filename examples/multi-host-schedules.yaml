@@ -1,0 +1,30 @@
+# Paths are current collector snapshots. Names and IANA zones are mandatory.
+sources:
+  - type: sql
+    host: sql-east
+    instance: PRODUCTION
+    timezone: America/New_York
+    path: /srv/configbackup/current/sql-east
+  - type: system
+    host: windows-east
+    timezone: America/New_York
+    path: /srv/configbackup/current/windows-east
+  - type: postgresql
+    host: pg-west
+    timezone: America/Los_Angeles
+    path: /srv/configbackup/current/pg-west
+analysis:
+  watchdogs: ['windows:windows-east:\\RestartWorker']
+  exclude_from_load: []
+  duration_overrides_minutes: {}
+reports:
+  daily:
+    exclude: ['windows:windows-east:\\RestartWorker']
+  overlaps:
+    exclude: []
+  concurrency:
+    exclude: []
+  observed-concurrency:
+    exclude: []
+  slack:
+    exclude: []

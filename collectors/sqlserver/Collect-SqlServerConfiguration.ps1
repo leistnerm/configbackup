@@ -14,7 +14,7 @@
     dbatools instance scripts by default.
 
 .NOTES
-    Collector version: 1.4.5
+    Collector version: 1.6.0
     Requires:
       - PowerShell 5.1+ (PowerShell 7+ recommended)
       - dbatools PowerShell module
@@ -27,6 +27,9 @@ param(
     [string]$SqlInstance,
 
     [string]$OutputDirectory = $env:CONFIGBACKUP_OUTPUT,
+
+    # Optional in-memory credential for SQL authentication (never store in YAML).
+    [System.Management.Automation.PSCredential]$SqlCredential,
 
     # Comma/semicolon-delimited values are accepted, which is convenient when the
     # collector is launched by an external process/YAML task.
@@ -53,6 +56,7 @@ param(
     # Include frequently-changing size/usage counters in an inventory-only file.
     # Disabled by default to keep SQL configuration diffs meaningful.
     [switch]$IncludeCapacityMetrics,
+    [switch]$IncludePerformanceMetrics,
 
     [switch]$SkipInventory,
     [switch]$IncludeAgentHistory,
@@ -108,16 +112,18 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$CollectorVersion = '1.5.0'
+$CollectorVersion = '1.6.0'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Write-CollectorMessage {
     param([string]$Message)
+    if ($null -ne $SqlCredential) { $Message = $Message.Replace($SqlCredential.GetNetworkCredential().Password, '<REDACTED>') }
     [Console]::Out.WriteLine("[sql-collector] $Message")
 }
 
 function Write-CollectorError {
     param([string]$Message)
+    if ($null -ne $SqlCredential) { $Message = $Message.Replace($SqlCredential.GetNetworkCredential().Password, '<REDACTED>') }
     [Console]::Error.WriteLine("[sql-collector] ERROR: $Message")
 }
 
@@ -325,7 +331,6 @@ function Convert-SpaceRows {
             FileGroup              = Convert-ToStableString (Get-ObjectPropertyValue $space 'FileGroup')
             PhysicalName           = Convert-ToStableString (Get-ObjectPropertyValue $space 'PhysicalName')
             FileType               = Convert-ToStableString (Get-ObjectPropertyValue $space 'FileType')
-            FileSizeMB             = Get-SizeMegabytes (Get-ObjectPropertyValue $space 'FileSize')
             AutoGrowthType         = Convert-ToStableString (Get-ObjectPropertyValue $space 'AutoGrowType')
             AutoGrowthMB           = Get-SizeMegabytes (Get-ObjectPropertyValue $space 'AutoGrowth')
             AutoGrowthDisplay      = Convert-ToStableString (Get-ObjectPropertyValue $space 'AutoGrowth')
@@ -358,13 +363,17 @@ function Get-SqlPackageSourceConnectionString {
     )
 
     $builder = New-Object System.Data.SqlClient.SqlConnectionStringBuilder
-    $builder.DataSource = $ServerName
-    $builder.InitialCatalog = $DatabaseName
-    $builder.IntegratedSecurity = $true
-    $builder.Encrypt = $true
-    $builder.TrustServerCertificate = [bool]$TrustCertificate
-    $builder.ConnectTimeout = $TimeoutSeconds
-    $builder.ApplicationName = 'ConfigBackup.SqlCollector'
+    $builder['Data Source'] = $ServerName
+    $builder['Initial Catalog'] = $DatabaseName
+    $builder['Integrated Security'] = ($null -eq $SqlCredential)
+    if ($null -ne $SqlCredential) {
+        $builder['User ID'] = $SqlCredential.UserName
+        $builder['Password'] = $SqlCredential.GetNetworkCredential().Password
+    }
+    $builder['Encrypt'] = $true
+    $builder['TrustServerCertificate'] = [bool]$TrustCertificate
+    $builder['Connect Timeout'] = $TimeoutSeconds
+    $builder['Application Name'] = 'ConfigBackup.SqlCollector'
 
     $connectionString = $builder.ConnectionString.TrimEnd(';')
     if (-not [string]::IsNullOrWhiteSpace($AdditionalOptions)) {
@@ -403,7 +412,7 @@ function Invoke-SqlPackageExtract {
     $trustValue = if ($TrustCertificate) { 'True' } else { 'False' }
     $sortElementsValue = if ($SortElementsByName) { 'True' } else { 'False' }
 
-    if ([string]::IsNullOrWhiteSpace($AdditionalConnectionOptions)) {
+    if ([string]::IsNullOrWhiteSpace($AdditionalConnectionOptions) -and $null -eq $SqlCredential) {
         # Keep the default invocation identical to a normal SqlPackage CLI command. This
         # path is intentionally simple because it is also easy to reproduce manually.
         $arguments = @(
@@ -416,6 +425,7 @@ function Invoke-SqlPackageExtract {
             "/TargetFile:$TargetDirectory",
             '/p:ExtractTarget=SchemaObjectType',
             '/p:ExtractAllTableData=False',
+            '/p:IgnorePermissions=False',
             "/p:ScriptSortElementsByName=$sortElementsValue",
             "/p:VerifyExtraction=$verifyValue",
             '/Diagnostics:True',
@@ -437,6 +447,7 @@ function Invoke-SqlPackageExtract {
             "/TargetFile:$TargetDirectory",
             '/p:ExtractTarget=SchemaObjectType',
             '/p:ExtractAllTableData=False',
+            '/p:IgnorePermissions=False',
             "/p:ScriptSortElementsByName=$sortElementsValue",
             "/p:VerifyExtraction=$verifyValue",
             '/Diagnostics:True',
@@ -511,6 +522,7 @@ function Get-HadrEnabled {
         return ([int]$value -eq 1)
     }
     catch {
+        $script:HadrDetectionError = $_.Exception.Message
         Write-CollectorMessage ("Unable to determine HADR status; treating Availability Groups as unavailable: {0}" -f $_.Exception.Message)
         return $false
     }
@@ -623,7 +635,9 @@ function Export-InstanceConfiguration {
     $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("configbackup-dbatools-" + [guid]::NewGuid().ToString('N'))
     [System.IO.Directory]::CreateDirectory($tempRoot) | Out-Null
 
+    $previousExportPath = Get-DbatoolsConfigValue -FullName 'Path.DbatoolsExport'
     try {
+        Set-DbatoolsConfig -FullName 'Path.DbatoolsExport' -Value $tempRoot | Out-Null
         # Databases are handled by the inventory/SqlPackage path below. SQL Agent is
         # exported separately by Export-SqlAgentConfiguration. Availability Groups are
         # also excluded from the broad Export-DbaInstance pass because dbatools treats
@@ -631,7 +645,7 @@ function Export-InstanceConfiguration {
         # conditionally export AGs below only when SERVERPROPERTY('IsHadrEnabled') = 1.
         $requestedExcludes = @(Expand-NameList $AdditionalExcludes)
         $skipAvailabilityGroups = ($requestedExcludes -contains 'AvailabilityGroups')
-        $excludes = @('Databases', 'AgentServer', 'AvailabilityGroups') + $requestedExcludes
+        $excludes = @('Databases', 'AgentServer', 'AvailabilityGroups', 'SpConfigure') + $requestedExcludes
         $excludes = @($excludes | Select-Object -Unique)
 
         Write-CollectorMessage 'Exporting SQL Server instance configuration with dbatools'
@@ -719,6 +733,22 @@ function Export-InstanceConfiguration {
             Copy-Item -LiteralPath $file.FullName -Destination $targetPath -Force
         }
 
+        # Export-DbaSpConfigure temporarily changes 'show advanced options'.
+        # Read the catalog instead: collection must never reconfigure the source.
+        if ($requestedExcludes -notcontains 'SpConfigure') {
+            $settings = Invoke-QueryTable -ServerObject $ServerObject -DatabaseName 'master' -Query 'SELECT name,value FROM sys.configurations ORDER BY name;'
+            $lines = @('-- Configured values; review before applying to another instance.', "EXEC sys.sp_configure N'show advanced options', 1;", 'RECONFIGURE;')
+            foreach ($setting in $settings.Rows) {
+                if ($setting.name -ne 'show advanced options') {
+                    $lines += ('EXEC sys.sp_configure {0}, {1};' -f (Get-SqlLiteral $setting.name), ([string]$setting.value))
+                }
+            }
+            $lines += 'RECONFIGURE;'
+            $advanced = @($settings.Rows | Where-Object { $_.name -eq 'show advanced options' })[0].value
+            $lines += "EXEC sys.sp_configure N'show advanced options', $advanced;"
+            $lines += 'RECONFIGURE;'
+            Write-Utf8Text -Path (Join-Path $TargetDirectory 'sp_configure.sql') -Text (($lines -join "`n") + "`n")
+        }
         Write-CollectorMessage ("Instance export created {0} file(s)" -f $fileInfos.Count)
 
         if (-not $skipAvailabilityGroups) {
@@ -729,6 +759,7 @@ function Export-InstanceConfiguration {
         }
     }
     finally {
+        Set-DbatoolsConfig -FullName 'Path.DbatoolsExport' -Value $previousExportPath | Out-Null
         if (Test-Path -LiteralPath $tempRoot) {
             Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
         }
@@ -953,7 +984,8 @@ function Get-SqlLiteral {
 }
 
 function Convert-DataTableRows {
-    param([Parameter(Mandatory = $true)]$Table)
+    param([Parameter(Mandatory = $true)][AllowNull()]$Table)
+    if ($null -eq $Table) { return @() }
     $rows = foreach ($row in $Table.Rows) {
         $ordered = [ordered]@{}
         foreach ($column in $Table.Columns) {
@@ -1083,7 +1115,7 @@ function Export-SqlAgentConfiguration {
             }
         }
         catch {
-            Write-CollectorError "Unable to script SQL Agent job '$($job.Name)': $($_.Exception.Message)"
+            throw "Unable to script SQL Agent job '$($job.Name)': $($_.Exception.Message)"
         }
         $jobIndex += [pscustomobject][ordered]@{
             Name = $job.Name
@@ -1113,7 +1145,7 @@ function Export-SqlAgentConfiguration {
             }
         }
         catch {
-            Write-CollectorError "Unable to collect SQL Agent $($spec.Name): $($_.Exception.Message)"
+            throw "Unable to collect SQL Agent $($spec.Name): $($_.Exception.Message)"
         }
     }
 }
@@ -1128,7 +1160,7 @@ function Export-SsisConfiguration {
     )
 
     if ($null -eq $ServerObject.Databases['SSISDB']) {
-        Write-CollectorMessage 'SSISDB is not present; skipping project-deployment SSIS collection'
+        throw 'SSISDB is absent or not visible; previous SSIS snapshot preserved'
     }
     else {
         Write-CollectorMessage 'Collecting SSISDB projects, packages, parameters, environments, and references'
@@ -1330,6 +1362,42 @@ ORDER BY f.name,p.name;
     }
 }
 
+# A section is eligible only after all its outputs have been produced and hashed.
+$script:CollectionSections = @()
+$script:HadrDetectionError = $null
+$script:RequireServerVisibility = $false
+$script:IsSqlSysadmin = $false
+function Save-CollectionManifest {
+    param([bool]$Finalized = $false)
+    $payload = [ordered]@{schema_version=1; run_id=[string]$env:CONFIGBACKUP_RUN_ID; finalized=$Finalized; sections=@($script:CollectionSections)}
+    $temp = Join-Path $OutputDirectory 'collection-manifest.json.tmp'
+    Write-StableJson -Path $temp -Value $payload -Depth 20
+    Move-Item -LiteralPath $temp -Destination (Join-Path $OutputDirectory 'collection-manifest.json') -Force
+}
+function Invoke-CollectionSection {
+    param([string]$Path, [scriptblock]$Action)
+    $status = 'complete'; $errorText = ''; $files = [ordered]@{}
+    try {
+        if ($script:RequireServerVisibility -and -not $script:IsSqlSysadmin -and $Path -match '^instance/(catalog|scripts|agent|ssis)(/|$)') { throw 'sysadmin is required to certify complete instance metadata' }
+        & $Action
+        $target = Join-Path $OutputDirectory $Path
+        if (Test-Path -LiteralPath $target) {
+            $items = if (Test-Path -LiteralPath $target -PathType Leaf) { @(Get-Item -LiteralPath $target) } else { @(Get-ChildItem -LiteralPath $target -Recurse -File) }
+            foreach ($file in $items | Sort-Object FullName) {
+                if ($file.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { throw 'Reparse points are not valid collector output' }
+                $relative = $file.FullName.Substring($OutputDirectory.Length).TrimStart([char[]]'\/').Replace('\','/')
+                $files[$relative] = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+        }
+    }
+    catch {
+        $status = 'failed'; $errorText = $_.Exception.Message; $files = [ordered]@{}
+        Write-CollectorError "Section '$Path' failed; previous archive/Git snapshot will be preserved: $errorText"
+    }
+    $script:CollectionSections += [ordered]@{path=$Path;status=$status;error=$errorText;files=$files}
+    Save-CollectionManifest
+}
+
 try {
     if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
         throw 'OutputDirectory was not specified and CONFIGBACKUP_OUTPUT is not set.'
@@ -1337,6 +1405,8 @@ try {
 
     $OutputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
     [System.IO.Directory]::CreateDirectory($OutputDirectory) | Out-Null
+    if (@(Get-ChildItem -LiteralPath $OutputDirectory -Force).Count -gt 0) { throw 'Output directory must be empty; use clean_output: true or a fresh directory' }
+    Save-CollectionManifest
 
     Write-CollectorMessage "Collector version $CollectorVersion"
     Write-CollectorMessage "SQL instance: $SqlInstance"
@@ -1351,7 +1421,9 @@ try {
 
     $resolvedSqlPackage = $null
     $sqlPackageVersion = $null
+    $script:SqlPackageError = $null
     if (-not $SkipSchema) {
+      try {
         if (Test-Path -LiteralPath $SqlPackagePath) {
             $resolvedSqlPackage = (Resolve-Path -LiteralPath $SqlPackagePath).Path
         }
@@ -1364,6 +1436,7 @@ try {
             throw "Unable to execute SqlPackage at '$resolvedSqlPackage'."
         }
         $sqlPackageVersion = $versionOutput
+      } catch { $script:SqlPackageError = $_.Exception.Message; Write-CollectorError "Schema extraction unavailable: $script:SqlPackageError" }
     }
 
     Assert-SafeAppendConnectionString -Value $AppendConnectionString
@@ -1380,15 +1453,19 @@ try {
         $connectArgs.TrustServerCertificate = $true
     }
 
+    if ($null -ne $SqlCredential) { $connectArgs.SqlCredential = $SqlCredential }
+
     Write-CollectorMessage 'Connecting with dbatools'
     $server = Connect-DbaInstance @connectArgs
+    $visibility = Invoke-QueryTable -ServerObject $server -DatabaseName 'master' -Query "SELECT IS_SRVROLEMEMBER(N'sysadmin') AS allowed;"
+    $script:IsSqlSysadmin = ($visibility.Rows.Count -eq 1 -and [int]$visibility.Rows[0]['allowed'] -eq 1)
+    $script:RequireServerVisibility = $true
 
     $requestedDatabases = @(Expand-NameList $Database)
     $excludedDatabases = @(Expand-NameList $ExcludeDatabase)
 
     $databaseArgs = @{
         SqlInstance     = $server
-        OnlyAccessible  = $true
         EnableException = $true
     }
     if ($requestedDatabases.Count -gt 0) {
@@ -1405,6 +1482,11 @@ try {
         $IncludeTempdb -or $_.Name -ne 'tempdb'
     } | Sort-Object Name)
 
+    foreach ($requested in $requestedDatabases) {
+        if (-not ($databases | Where-Object { $_.Name -eq $requested })) {
+            $script:CollectionSections += [ordered]@{path=('databases/' + (Get-SafePathSegment $requested));status='failed';error='Requested database was not discovered';files=@{}}
+        }
+    }
     Write-CollectorMessage ("Selected {0} database(s)" -f $databases.Count)
 
     $hadrEnabled = Get-HadrEnabled -ServerObject $server
@@ -1458,6 +1540,7 @@ try {
     Write-StableJson -Path (Join-Path $OutputDirectory 'collector.json') -Value $collectorInfo
 
     if (-not $SkipHostConfiguration) {
+        Invoke-CollectionSection 'instance/host-linux' {
         $hostPlatform = [string](Get-ObjectPropertyValue $server 'HostPlatform')
         if ($hostPlatform -match '^(?i:Linux)$') {
             if (Test-IsLinuxRuntime) {
@@ -1475,6 +1558,11 @@ try {
         }
     }
 
+    } # Host section
+    if (-not (Test-Path -LiteralPath (Join-Path $instanceDirectory 'host-linux'))) {
+        $script:CollectionSections = @($script:CollectionSections | Where-Object { $_.path -ne 'instance/host-linux' })
+    }
+
     $databaseMap = @()
     $usedDatabaseDirectories = @{}
     $databaseInventory = @()
@@ -1482,71 +1570,104 @@ try {
     $allSpaceRows = @()
 
     if (-not $SkipInventory) {
-        Write-CollectorMessage 'Collecting database and file inventory'
-        $spaceObjects = if ($databases.Count -gt 0) {
-            @($databases | Get-DbaDbSpace -EnableException)
+        $instanceCatalogs = @{
+            'configuration' = 'SELECT name,value,minimum,maximum,is_dynamic,is_advanced,description FROM sys.configurations ORDER BY name;'
+            'features' = "SELECT CONVERT(nvarchar(128),SERVERPROPERTY('Edition')) AS edition, CONVERT(nvarchar(128),SERVERPROPERTY('ProductVersion')) AS product_version, CONVERT(int,SERVERPROPERTY('IsFullTextInstalled')) AS fulltext_installed, CONVERT(int,SERVERPROPERTY('IsIntegratedSecurityOnly')) AS integrated_security_only, CONVERT(int,SERVERPROPERTY('IsHadrEnabled')) AS hadr_enabled, CONVERT(nvarchar(128),SERVERPROPERTY('FilestreamConfiguredLevel')) AS filestream_configured_level;"
+            'database-features' = 'SELECT name,compatibility_level,collation_name,recovery_model_desc,containment_desc,is_read_only,is_auto_close_on,is_auto_shrink_on,is_published,is_subscribed,is_merge_published,is_distributor,is_cdc_enabled,is_broker_enabled,is_trustworthy_on,is_db_chaining_on,snapshot_isolation_state_desc,is_read_committed_snapshot_on,delayed_durability_desc FROM sys.databases ORDER BY name;'
+            'cluster-identity' = "SELECT CONVERT(nvarchar(128),SERVERPROPERTY('ServerName')) AS server_name,CONVERT(nvarchar(128),SERVERPROPERTY('MachineName')) AS virtual_machine_name,CONVERT(nvarchar(128),SERVERPROPERTY('InstanceName')) AS instance_name,CONVERT(nvarchar(128),SERVERPROPERTY('ComputerNamePhysicalNetBIOS')) AS physical_node,CONVERT(int,SERVERPROPERTY('IsClustered')) AS is_clustered,CONVERT(int,SERVERPROPERTY('IsHadrEnabled')) AS hadr_enabled;"
+            'availability-groups' = 'SELECT name,automated_backup_preference_desc,failure_condition_level,health_check_timeout,db_failover,is_distributed,cluster_type_desc,required_synchronized_secondaries_to_commit FROM sys.availability_groups ORDER BY name;'
+            'availability-replicas' = 'SELECT g.name AS group_name,r.replica_server_name,r.endpoint_url,r.availability_mode_desc,r.failover_mode_desc,r.session_timeout,r.primary_role_allow_connections_desc,r.secondary_role_allow_connections_desc,r.backup_priority,r.read_only_routing_url FROM sys.availability_replicas r JOIN sys.availability_groups g ON r.group_id=g.group_id ORDER BY g.name,r.replica_server_name;'
+            'availability-databases' = 'SELECT g.name AS group_name,d.database_name FROM sys.availability_databases_cluster d JOIN sys.availability_groups g ON d.group_id=g.group_id ORDER BY g.name,d.database_name;'
+            'availability-listeners' = 'SELECT g.name AS group_name,l.dns_name,l.port,l.is_conformant FROM sys.availability_group_listeners l JOIN sys.availability_groups g ON l.group_id=g.group_id ORDER BY g.name,l.dns_name;'
+            'availability-listener-addresses' = 'SELECT g.name AS group_name,l.dns_name,a.ip_address,a.ip_subnet_mask,a.is_dhcp,a.network_subnet_ip,a.network_subnet_ipv4_mask,a.network_subnet_prefix_length FROM sys.availability_group_listener_ip_addresses a JOIN sys.availability_group_listeners l ON a.listener_id=l.listener_id JOIN sys.availability_groups g ON l.group_id=g.group_id ORDER BY g.name,l.dns_name,a.ip_address;'
+            'availability-routing' = 'SELECT g.name AS group_name,r.replica_server_name,l.routing_priority,t.replica_server_name AS target_replica FROM sys.availability_read_only_routing_lists l JOIN sys.availability_replicas r ON l.replica_id=r.replica_id JOIN sys.availability_replicas t ON l.read_only_replica_id=t.replica_id JOIN sys.availability_groups g ON r.group_id=g.group_id ORDER BY g.name,r.replica_server_name,l.routing_priority,t.replica_server_name;'
+            'services' = 'SELECT servicename,startup_type_desc,service_account,filename,is_clustered,cluster_nodename FROM sys.dm_server_services ORDER BY servicename;'
+            'endpoints' = 'SELECT name,principal_id,protocol_desc,type_desc,state_desc,is_admin_endpoint FROM sys.endpoints ORDER BY name;'
+            'tcp-endpoints' = 'SELECT e.name,t.port,t.ip_address FROM sys.tcp_endpoints t JOIN sys.endpoints e ON t.endpoint_id=e.endpoint_id ORDER BY e.name;'
+            'linked-servers' = 'SELECT name,product,provider,data_source,location,catalog,is_linked,is_remote_login_enabled,is_rpc_out_enabled,is_data_access_enabled,is_collation_compatible,uses_remote_collation,collation_name,connect_timeout,query_timeout FROM sys.servers ORDER BY name;'
+            'credentials' = 'SELECT name,credential_identity FROM sys.credentials ORDER BY name;'
+            'server-principals' = "SELECT name,type_desc,is_disabled,default_database_name,default_language_name,CONVERT(varchar(max),sid,1) AS sid FROM sys.server_principals WHERE type NOT IN ('C','K') ORDER BY name;"
+            'server-role-members' = 'SELECT r.name AS role_name,m.name AS member_name FROM sys.server_role_members rm JOIN sys.server_principals r ON rm.role_principal_id=r.principal_id JOIN sys.server_principals m ON rm.member_principal_id=m.principal_id ORDER BY r.name,m.name;'
+            'server-permissions' = 'SELECT grantee.name AS grantee,grantor.name AS grantor,p.class_desc,p.major_id,p.permission_name,p.state_desc FROM sys.server_permissions p JOIN sys.server_principals grantee ON p.grantee_principal_id=grantee.principal_id JOIN sys.server_principals grantor ON p.grantor_principal_id=grantor.principal_id ORDER BY grantee.name,p.class_desc,p.major_id,p.permission_name;'
+            'fulltext-languages' = 'SELECT lcid,name FROM sys.fulltext_languages ORDER BY lcid;'
+            'fulltext-document-types' = 'SELECT document_type,class_id,path,version,manufacturer FROM sys.fulltext_document_types ORDER BY document_type;'
         }
-        else {
-            @()
-        }
-        $allSpaceRows = @(Convert-SpaceRows -SpaceObjects $spaceObjects)
-        if ($IncludeCapacityMetrics) {
-            $capacityRows = foreach ($space in @($spaceObjects)) {
-                [pscustomobject][ordered]@{
-                    Database = Convert-ToStableString (Get-ObjectPropertyValue $space 'Database')
-                    FileName = Convert-ToStableString (Get-ObjectPropertyValue $space 'FileName')
-                    UsedSpaceMB = Get-SizeMegabytes (Get-ObjectPropertyValue $space 'UsedSpace')
-                    FreeSpaceMB = Get-SizeMegabytes (Get-ObjectPropertyValue $space 'FreeSpace')
-                    PercentUsed = Convert-ToInvariantNumber (Get-ObjectPropertyValue $space 'PercentUsed')
-                }
+        foreach ($catalogName in $instanceCatalogs.Keys | Sort-Object) {
+            $catalogPath = "instance/catalog/$catalogName.csv"
+            Invoke-CollectionSection $catalogPath {
+                $rows = Convert-DataTableRows (Invoke-QueryTable -ServerObject $server -DatabaseName 'master' -Query $instanceCatalogs[$catalogName])
+                Write-StableCsv -Path (Join-Path $OutputDirectory $catalogPath) -Rows $rows
             }
-            Write-StableCsv -Path (Join-Path $instanceDirectory 'capacity-usage.csv') -Rows @($capacityRows)
         }
-
-        foreach ($db in $databases) {
-            $metadata = Get-DatabaseMetadata -DatabaseObject $db
-            $databaseInventory += [pscustomobject]$metadata
-            $allFileGroupRows += @(Get-FileGroupRows -DatabaseObject $db)
-        }
-
-        Write-StableCsv -Path (Join-Path $instanceDirectory 'databases.csv') -Rows $databaseInventory
-        Write-StableCsv -Path (Join-Path $instanceDirectory 'database-files.csv') -Rows $allSpaceRows
-        Write-StableCsv -Path (Join-Path $instanceDirectory 'filegroups.csv') -Rows $allFileGroupRows
     }
 
     if (-not $SkipInstanceExport) {
-        $instanceExportArgs = @{
-            ServerObject       = $server
-            TargetDirectory    = (Join-Path $instanceDirectory 'scripts')
-            AdditionalExcludes = $InstanceExclude
-            HadrEnabled        = $hadrEnabled
+        # One manifest boundary per component; an unsupported service cannot freeze
+        # unrelated instance settings. Legacy flat script paths remain protected.
+        $components = @('SpConfigure','CustomErrors','ServerRoles','Credentials','Logins','DatabaseMail','CentralManagementServer','BackupDevices','LinkedServers','SystemTriggers','Audits','ServerAuditSpecifications','Endpoints','PolicyManagement','ResourceGovernor','ExtendedEvents','ReplicationSettings','SysDbUserObjects','AvailabilityGroups','OleDbProvider')
+        $allExportComponents = $components + @('Databases','AgentServer','DbCertificates')
+        $requestedExcludes = @(Expand-NameList $InstanceExclude)
+        foreach ($component in $components) {
+            if ($requestedExcludes -contains $component) { continue }
+            $componentPath = 'instance/scripts/' + $component
+            Invoke-CollectionSection $componentPath {
+                $target = Join-Path $OutputDirectory $componentPath
+                if ($component -eq 'AvailabilityGroups' -and $script:HadrDetectionError) { throw $script:HadrDetectionError }
+                if ($component -eq 'ReplicationSettings') {
+                    # Export-DbaInstance swallows replication exceptions internally.
+                    [System.IO.Directory]::CreateDirectory($target) | Out-Null
+                    Export-DbaReplServerSetting -SqlInstance $server -Path $target -FilePath (Join-Path $target 'replication.sql') -EnableException | Out-Null
+                } elseif ($component -eq 'PolicyManagement' -and ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT)) {
+                    throw 'Policy Management scripting requires Windows; prior files preserved'
+                } else {
+                    $excludeOthers = @($allExportComponents | Where-Object { $_ -ne $component })
+                    Export-InstanceConfiguration -ServerObject $server -TargetDirectory $target -AdditionalExcludes $excludeOthers -HadrEnabled:$hadrEnabled
+                }
+            }
         }
-        Export-InstanceConfiguration @instanceExportArgs
     }
 
     if (-not $SkipAgent) {
+        Invoke-CollectionSection 'instance/agent' {
         Export-SqlAgentConfiguration -ServerObject $server -TargetDirectory (Join-Path $instanceDirectory 'agent')
+        } # Agent config section
         if ($IncludeAgentHistory) {
+          try {
             # step_id=0 identifies the entire job execution (not each step).
             # Run date/time and duration are kept as raw SQL Agent integers;
             # schedule analyzer decodes HHMMSS even when hours exceed 23.
             $historyQuery = @"
 SELECT TOP (20000)
-    j.name AS job_name,
+    j.name AS job_name, h.job_id, h.step_id, h.step_name,
     h.run_date, h.run_time, h.run_duration, h.run_status
 FROM msdb.dbo.sysjobhistory AS h
 JOIN msdb.dbo.sysjobs AS j ON h.job_id=j.job_id
-WHERE h.step_id=0
-  AND h.run_date >= CONVERT(int, CONVERT(varchar(8), DATEADD(day, -$AgentHistoryDays, GETDATE()), 112))
+WHERE h.run_date >= CONVERT(int, CONVERT(varchar(8), DATEADD(day, -$AgentHistoryDays, GETDATE()), 112))
 ORDER BY j.name, h.run_date DESC, h.run_time DESC, h.instance_id DESC;
 "@
-            Write-StableCsv -Path (Join-Path $instanceDirectory 'agent/job-runs.csv') -Rows (Convert-DataTableRows (Invoke-QueryTable -ServerObject $server -DatabaseName 'msdb' -Query $historyQuery))
+            Write-StableCsv -Path (Join-Path $OutputDirectory 'telemetry/agent/job-runs.csv') -Rows (Convert-DataTableRows (Invoke-QueryTable -ServerObject $server -DatabaseName 'msdb' -Query $historyQuery))
+          }
+          catch { Write-CollectorError "Agent history unavailable: $($_.Exception.Message)" }
         }
     }
 
     if (-not $SkipSsis) {
+      try {
+      $ssisVisibility = Invoke-QueryTable -ServerObject $server -DatabaseName 'master' -Query "SELECT DB_ID(N'SSISDB') AS dbid, IS_SRVROLEMEMBER(N'sysadmin') AS is_sysadmin;"
+      if (-not $IncludeLegacySsis -and $ssisVisibility.Rows.Count -eq 1 -and $ssisVisibility.Rows[0]['dbid'] -is [DBNull] -and [int]$ssisVisibility.Rows[0]['is_sysadmin'] -eq 1) {
+        $script:CollectionSections += [ordered]@{path='instance/ssis';status='not_applicable';error='SSISDB is not installed';files=@{}}
+      } else {
+        Invoke-CollectionSection 'instance/ssis' {
+        if ($AllowPartialSsis) { throw 'AllowPartialSsis cannot certify a complete archive section; collect with full visibility' }
         Export-SsisConfiguration -ServerObject $server -TargetDirectory (Join-Path $instanceDirectory 'ssis') -SkipIspacFiles:$SkipIspac -IncludeLegacy:$IncludeLegacySsis -AllowPartial:$AllowPartialSsis
     }
+
+      }
+      } catch {
+        $script:CollectionSections += [ordered]@{path='instance/ssis';status='failed';error=$_.Exception.Message;files=@{}}
+        Write-CollectorError ('SSIS discovery failed: ' + $_.Exception.Message)
+      }
+    } # SSIS section
 
     foreach ($db in $databases) {
         $safeName = Get-SafePathSegment -Value $db.Name
@@ -1559,6 +1680,24 @@ ORDER BY j.name, h.run_date DESC, h.run_time DESC, h.instance_id DESC;
             Directory = $safeName
         }
 
+        Invoke-CollectionSection "databases/$safeName" {
+        $stateTable = Invoke-QueryTable -ServerObject $server -DatabaseName 'master' -Query ("SELECT state_desc FROM sys.databases WHERE name=" + (Get-SqlLiteral $db.Name))
+        if ($stateTable.Rows.Count -ne 1 -or [string]$stateTable.Rows[0]['state_desc'] -ne 'ONLINE') { throw 'Database is restoring, offline, transitional, or no longer visible' }
+        $visibility = Invoke-QueryTable -ServerObject $server -DatabaseName $db.Name -Query "SELECT CASE WHEN USER_NAME()=N'dbo' OR IS_SRVROLEMEMBER(N'sysadmin')=1 THEN 1 ELSE 0 END AS can_view;"
+        if ($visibility.Rows.Count -ne 1 -or [int]$visibility.Rows[0]['can_view'] -ne 1) { throw 'Run as dbo or sysadmin to certify complete metadata; lesser permissions can silently hide objects' }
+        if (-not $SkipSchema) {
+            if ($script:SqlPackageError) { throw $script:SqlPackageError }
+            # DacFx writes object names to filesystem paths. Do not allow a
+            # case-sensitive SQL schema to lose objects on Windows/default macOS.
+            $objectNames = Invoke-QueryTable -ServerObject $server -DatabaseName $db.Name -Query "SELECT SCHEMA_NAME(schema_id) AS schema_name,name,type FROM sys.objects WHERE is_ms_shipped=0 UNION ALL SELECT N'',name,N'SCHEMA' FROM sys.schemas;"
+            $portableNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+            foreach ($objectName in $objectNames.Rows) {
+                $identity = [string]$objectName.schema_name + '/' + [string]$objectName.type + '/' + [string]$objectName.name
+                if (-not $portableNames.Add($identity)) { throw 'Case-colliding SQL object names cannot be safely extracted to portable files' }
+            }
+            $unreadable = Invoke-QueryTable -ServerObject $server -DatabaseName $db.Name -Query 'SELECT COUNT(*) AS unreadable FROM sys.sql_modules m JOIN sys.objects o ON m.object_id=o.object_id WHERE m.definition IS NULL AND o.is_ms_shipped=0;'
+            if ([int]$unreadable.Rows[0]['unreadable'] -gt 0) { throw 'Encrypted or unreadable SQL modules prevent a complete schema export' }
+        }
         $dbDirectory = Join-Path $databaseRoot $safeName
         [System.IO.Directory]::CreateDirectory($dbDirectory) | Out-Null
 
@@ -1566,10 +1705,63 @@ ORDER BY j.name, h.run_date DESC, h.run_time DESC, h.instance_id DESC;
             $metadata = Get-DatabaseMetadata -DatabaseObject $db
             Write-StableJson -Path (Join-Path $dbDirectory 'database.json') -Value $metadata
 
-            $dbSpaceRows = @($allSpaceRows | Where-Object { $_.Database -eq $db.Name })
-            $dbFileGroupRows = @($allFileGroupRows | Where-Object { $_.Database -eq $db.Name })
+            $spaceObjects = @($db | Get-DbaDbSpace -EnableException)
+            $dbSpaceRows = @(Convert-SpaceRows -SpaceObjects $spaceObjects)
+            $dbFileGroupRows = @(Get-FileGroupRows -DatabaseObject $db)
+            if ($IncludeCapacityMetrics) {
+                $capacity = foreach ($space in $spaceObjects) {
+                    [pscustomobject][ordered]@{
+                        FileName = Convert-ToStableString (Get-ObjectPropertyValue $space 'FileName')
+                        FileSizeMB = Get-SizeMegabytes (Get-ObjectPropertyValue $space 'FileSize')
+                        UsedSpaceMB = Get-SizeMegabytes (Get-ObjectPropertyValue $space 'UsedSpace')
+                        FreeSpaceMB = Get-SizeMegabytes (Get-ObjectPropertyValue $space 'FreeSpace')
+                    }
+                }
+                Write-StableCsv -Path (Join-Path $OutputDirectory "telemetry/databases/$safeName/capacity.csv") -Rows @($capacity)
+            }
             Write-StableCsv -Path (Join-Path $dbDirectory 'files.csv') -Rows $dbSpaceRows
             Write-StableCsv -Path (Join-Path $dbDirectory 'filegroups.csv') -Rows $dbFileGroupRows
+            $databaseCatalogs = @{
+                'replication-publications' = "IF OBJECT_ID(N'dbo.syspublications') IS NOT NULL SELECT name,description,status,sync_method,repl_freq,immediate_sync,enabled_for_internet,allow_push,allow_pull,allow_anonymous,independent_agent,retention,allow_sync_tran,autogen_sync_procs,allow_queued_tran,allow_dts,allow_subscription_copy FROM dbo.syspublications ORDER BY name;"
+                'replication-articles' = "IF OBJECT_ID(N'dbo.sysarticles') IS NOT NULL SELECT p.name AS publication,a.name,a.dest_owner,a.dest_table,a.type,a.status,a.schema_option,a.ins_cmd,a.upd_cmd,a.del_cmd,OBJECT_SCHEMA_NAME(a.objid) AS source_schema,OBJECT_NAME(a.objid) AS source_object FROM dbo.sysarticles a JOIN dbo.syspublications p ON a.pubid=p.pubid ORDER BY p.name,a.name;"
+                'replication-subscriptions' = "IF OBJECT_ID(N'dbo.syssubscriptions') IS NOT NULL SELECT a.name AS article,s.srvname AS subscriber,s.dest_db,s.status,s.sync_type,s.subscription_type,s.update_mode FROM dbo.syssubscriptions s JOIN dbo.sysarticles a ON s.artid=a.artid ORDER BY a.name,s.srvname,s.dest_db;"
+                'merge-publications' = "IF OBJECT_ID(N'dbo.sysmergepublications') IS NOT NULL SELECT name,description,status,retention,sync_mode,allow_push,allow_pull,allow_anonymous,centralized_conflicts,dynamic_filters,snapshot_in_defaultfolder,compress_snapshot FROM dbo.sysmergepublications ORDER BY name;"
+                'merge-articles' = "IF OBJECT_ID(N'dbo.sysmergearticles') IS NOT NULL SELECT p.name AS publication,a.name,a.type,a.status,a.destination_owner,a.destination_object,a.subset_filterclause,a.schema_option FROM dbo.sysmergearticles a JOIN dbo.sysmergepublications p ON a.pubid=p.pubid ORDER BY p.name,a.name;"
+                'computed-columns' = 'SELECT OBJECT_SCHEMA_NAME(c.object_id) AS schema_name,OBJECT_NAME(c.object_id) AS object_name,c.name,c.definition,c.is_persisted FROM sys.computed_columns c JOIN sys.tables t ON c.object_id=t.object_id ORDER BY schema_name,object_name,c.name;'
+                'identity-columns' = 'SELECT OBJECT_SCHEMA_NAME(c.object_id) AS schema_name,OBJECT_NAME(c.object_id) AS object_name,c.name,CONVERT(nvarchar(128),c.seed_value) AS seed_value,CONVERT(nvarchar(128),c.increment_value) AS increment_value,c.is_not_for_replication FROM sys.identity_columns c JOIN sys.tables t ON c.object_id=t.object_id ORDER BY schema_name,object_name,c.name;'
+                'check-constraints' = 'SELECT OBJECT_SCHEMA_NAME(parent_object_id) AS schema_name,OBJECT_NAME(parent_object_id) AS table_name,name,definition,is_disabled,is_not_trusted,is_not_for_replication FROM sys.check_constraints ORDER BY schema_name,table_name,name;'
+                'foreign-keys' = 'SELECT OBJECT_SCHEMA_NAME(parent_object_id) AS schema_name,OBJECT_NAME(parent_object_id) AS table_name,name,OBJECT_SCHEMA_NAME(referenced_object_id) AS referenced_schema,OBJECT_NAME(referenced_object_id) AS referenced_table,delete_referential_action_desc,update_referential_action_desc,is_disabled,is_not_trusted,is_not_for_replication FROM sys.foreign_keys ORDER BY schema_name,table_name,name;'
+                'native-modules' = 'SELECT OBJECT_SCHEMA_NAME(object_id) AS schema_name,OBJECT_NAME(object_id) AS object_name,uses_native_compilation,is_schema_bound,execute_as_principal_id FROM sys.sql_modules WHERE uses_native_compilation=1 ORDER BY schema_name,object_name;'
+                'tables' = 'SELECT SCHEMA_NAME(schema_id) AS schema_name,name,is_memory_optimized,durability_desc,temporal_type_desc,OBJECT_SCHEMA_NAME(history_table_id) AS history_schema,OBJECT_NAME(history_table_id) AS history_table,is_filetable,lock_escalation_desc,is_replicated,is_merge_published,is_tracked_by_cdc FROM sys.tables ORDER BY schema_name,name;'
+                'columns' = 'SELECT OBJECT_SCHEMA_NAME(c.object_id) AS schema_name,OBJECT_NAME(c.object_id) AS object_name,c.name,c.column_id,TYPE_NAME(c.user_type_id) AS type_name,c.max_length,c.precision,c.scale,c.collation_name,c.is_nullable,c.is_identity,c.is_computed,c.is_sparse,c.is_column_set,c.generated_always_type_desc,c.encryption_type_desc,c.encryption_algorithm_name,k.name AS column_encryption_key FROM sys.columns c JOIN sys.tables t ON c.object_id=t.object_id LEFT JOIN sys.column_encryption_keys k ON c.column_encryption_key_id=k.column_encryption_key_id ORDER BY schema_name,object_name,c.column_id;'
+                'security-policies' = 'SELECT SCHEMA_NAME(schema_id) AS schema_name,name,is_enabled,is_schema_bound FROM sys.security_policies ORDER BY schema_name,name;'
+                'security-predicates' = 'SELECT SCHEMA_NAME(p.schema_id) AS policy_schema,p.name AS policy_name,OBJECT_SCHEMA_NAME(s.target_object_id) AS table_schema,OBJECT_NAME(s.target_object_id) AS table_name,s.predicate_definition,s.predicate_type_desc,s.operation_desc FROM sys.security_predicates s JOIN sys.security_policies p ON s.object_id=p.object_id ORDER BY policy_schema,policy_name,table_schema,table_name,s.predicate_type_desc,s.operation_desc;'
+                'masked-columns' = 'SELECT OBJECT_SCHEMA_NAME(object_id) AS schema_name,OBJECT_NAME(object_id) AS object_name,name,is_masked,masking_function FROM sys.masked_columns WHERE is_masked=1 ORDER BY schema_name,object_name,name;'
+                'column-master-keys' = 'SELECT name,key_store_provider_name,key_path FROM sys.column_master_keys ORDER BY name;'
+                'column-encryption-keys' = 'SELECT name FROM sys.column_encryption_keys ORDER BY name;'
+                'column-key-mappings' = 'SELECT c.name AS column_encryption_key,m.name AS column_master_key,v.encryption_algorithm_name FROM sys.column_encryption_key_values v JOIN sys.column_encryption_keys c ON v.column_encryption_key_id=c.column_encryption_key_id JOIN sys.column_master_keys m ON v.column_master_key_id=m.column_master_key_id ORDER BY c.name,m.name;'
+                'indexes' = 'SELECT OBJECT_SCHEMA_NAME(i.object_id) AS schema_name,OBJECT_NAME(i.object_id) AS object_name,i.name,i.type_desc,i.is_unique,i.is_primary_key,i.is_unique_constraint,i.fill_factor,i.is_padded,i.is_disabled,i.ignore_dup_key,i.allow_row_locks,i.allow_page_locks,i.has_filter,i.filter_definition,d.name AS data_space FROM sys.indexes i JOIN sys.tables t ON i.object_id=t.object_id LEFT JOIN sys.data_spaces d ON i.data_space_id=d.data_space_id ORDER BY schema_name,object_name,i.name;'
+                'index-columns' = 'SELECT OBJECT_SCHEMA_NAME(i.object_id) AS schema_name,OBJECT_NAME(i.object_id) AS object_name,i.name AS index_name,c.name AS column_name,ic.key_ordinal,ic.partition_ordinal,ic.is_descending_key,ic.is_included_column FROM sys.index_columns ic JOIN sys.indexes i ON ic.object_id=i.object_id AND ic.index_id=i.index_id JOIN sys.columns c ON ic.object_id=c.object_id AND ic.column_id=c.column_id ORDER BY schema_name,object_name,index_name,ic.index_column_id;'
+                'hash-indexes' = 'SELECT OBJECT_SCHEMA_NAME(object_id) AS schema_name,OBJECT_NAME(object_id) AS object_name,name,bucket_count FROM sys.hash_indexes ORDER BY schema_name,object_name,name;'
+                'partition-functions' = 'SELECT name,type_desc,fanout,boundary_value_on_right FROM sys.partition_functions ORDER BY name;'
+                'partition-boundaries' = 'SELECT f.name,v.boundary_id,CONVERT(nvarchar(4000),v.value) AS boundary_value,CONVERT(nvarchar(128),SQL_VARIANT_PROPERTY(v.value,''BaseType'')) AS value_type FROM sys.partition_range_values v JOIN sys.partition_functions f ON v.function_id=f.function_id ORDER BY f.name,v.boundary_id;'
+                'partition-schemes' = 'SELECT s.name,f.name AS partition_function,d.destination_id,g.name AS filegroup_name FROM sys.partition_schemes s JOIN sys.partition_functions f ON s.function_id=f.function_id JOIN sys.destination_data_spaces d ON s.data_space_id=d.partition_scheme_id JOIN sys.filegroups g ON d.data_space_id=g.data_space_id ORDER BY s.name,d.destination_id;'
+                'compression' = 'SELECT OBJECT_SCHEMA_NAME(p.object_id) AS schema_name,OBJECT_NAME(p.object_id) AS object_name,i.name AS index_name,p.partition_number,p.data_compression_desc FROM sys.partitions p JOIN sys.indexes i ON p.object_id=i.object_id AND p.index_id=i.index_id JOIN sys.tables t ON p.object_id=t.object_id ORDER BY schema_name,object_name,index_name,p.partition_number;'
+                'scoped-configuration' = 'SELECT name,value,value_for_secondary FROM sys.database_scoped_configurations ORDER BY name;'
+                'principals' = "SELECT name,type_desc,default_schema_name,authentication_type_desc,CONVERT(varchar(max),sid,1) AS sid FROM sys.database_principals ORDER BY name;"
+                'role-members' = 'SELECT r.name AS role_name,m.name AS member_name FROM sys.database_role_members rm JOIN sys.database_principals r ON rm.role_principal_id=r.principal_id JOIN sys.database_principals m ON rm.member_principal_id=m.principal_id ORDER BY r.name,m.name;'
+                'permissions' = 'SELECT grantee.name AS grantee,grantor.name AS grantor,p.class_desc,p.major_id,p.minor_id,OBJECT_SCHEMA_NAME(p.major_id) AS object_schema,OBJECT_NAME(p.major_id) AS object_name,p.permission_name,p.state_desc FROM sys.database_permissions p JOIN sys.database_principals grantee ON p.grantee_principal_id=grantee.principal_id JOIN sys.database_principals grantor ON p.grantor_principal_id=grantor.principal_id ORDER BY grantee.name,p.class_desc,p.major_id,p.minor_id,p.permission_name;'
+                'file-configuration' = 'SELECT name,type_desc,physical_name,max_size,growth,is_percent_growth FROM sys.database_files ORDER BY name;'
+                'fulltext-catalogs' = 'SELECT name,path,is_default,is_accent_sensitivity_on FROM sys.fulltext_catalogs ORDER BY name;'
+                'fulltext-indexes' = 'SELECT OBJECT_SCHEMA_NAME(f.object_id) AS schema_name,OBJECT_NAME(f.object_id) AS object_name,i.name AS unique_index,c.name AS catalog_name,f.is_enabled,f.change_tracking_state_desc,s.name AS stoplist FROM sys.fulltext_indexes f JOIN sys.indexes i ON f.object_id=i.object_id AND f.unique_index_id=i.index_id LEFT JOIN sys.fulltext_catalogs c ON f.fulltext_catalog_id=c.fulltext_catalog_id LEFT JOIN sys.fulltext_stoplists s ON f.stoplist_id=s.stoplist_id ORDER BY schema_name,object_name;'
+                'fulltext-columns' = 'SELECT OBJECT_SCHEMA_NAME(f.object_id) AS schema_name,OBJECT_NAME(f.object_id) AS object_name,c.name AS column_name,f.language_id,tc.name AS type_column,f.statistical_semantics FROM sys.fulltext_index_columns f JOIN sys.columns c ON f.object_id=c.object_id AND f.column_id=c.column_id LEFT JOIN sys.columns tc ON f.object_id=tc.object_id AND f.type_column_id=tc.column_id ORDER BY schema_name,object_name,column_name;'
+                'fulltext-stopwords' = 'SELECT s.name AS stoplist,w.stopword,w.language_id FROM sys.fulltext_stopwords w JOIN sys.fulltext_stoplists s ON w.stoplist_id=s.stoplist_id ORDER BY s.name,w.language_id,w.stopword;'
+                'search-properties' = 'SELECT l.name AS property_list,p.property_name,p.property_set_guid,p.property_int_id,p.property_description FROM sys.registered_search_properties p JOIN sys.registered_search_property_lists l ON p.property_list_id=l.property_list_id ORDER BY l.name,p.property_name;'
+            }
+            foreach ($catalogName in $databaseCatalogs.Keys | Sort-Object) {
+                $rows = Convert-DataTableRows (Invoke-QueryTable -ServerObject $server -DatabaseName $db.Name -Query $databaseCatalogs[$catalogName])
+                Write-StableCsv -Path (Join-Path $dbDirectory ("catalog/" + $catalogName + '.csv')) -Rows $rows
+            }
         }
 
         if (-not $SkipSchema) {
@@ -1588,8 +1780,56 @@ ORDER BY j.name, h.run_date DESC, h.run_time DESC, h.instance_id DESC;
         }
     }
 
+    } # Database section
+
     Write-StableCsv -Path (Join-Path $OutputDirectory 'database-map.csv') -Rows $databaseMap
 
+    if ($IncludePerformanceMetrics) {
+        $metricQueries = @{
+            'waits' = 'SELECT wait_type,waiting_tasks_count,wait_time_ms,signal_wait_time_ms FROM sys.dm_os_wait_stats;'
+            'io' = 'SELECT database_id,file_id,num_of_reads,num_of_bytes_read,io_stall_read_ms,num_of_writes,num_of_bytes_written,io_stall_write_ms FROM sys.dm_io_virtual_file_stats(NULL,NULL);'
+            'counters' = 'SELECT object_name,counter_name,instance_name,cntr_value,cntr_type FROM sys.dm_os_performance_counters;'
+            'ssis-executions' = 'SELECT TOP (20000) execution_id,folder_name,project_name,package_name,status,start_time,end_time FROM SSISDB.catalog.executions ORDER BY execution_id DESC;'
+        }
+        $metricFailures = @()
+        foreach ($metric in $metricQueries.Keys | Sort-Object) {
+            try {
+                $rows = Convert-DataTableRows (Invoke-QueryTable -ServerObject $server -DatabaseName 'master' -Query $metricQueries[$metric])
+                Write-StableCsv -Path (Join-Path $OutputDirectory ("telemetry/" + $metric + '.csv')) -Rows $rows
+            } catch { $metricFailures += [ordered]@{section=$metric;error=$_.Exception.Message}; Write-CollectorError "Telemetry $metric failed: $($_.Exception.Message)" }
+        }
+        foreach ($db in $databases) {
+            try {
+                $query = 'SELECT q.query_id,p.plan_id,rs.runtime_stats_interval_id,rs.count_executions,rs.avg_duration,rs.avg_cpu_time,rs.avg_logical_io_reads,rs.avg_physical_io_reads,rs.avg_query_max_used_memory FROM sys.query_store_runtime_stats rs JOIN sys.query_store_plan p ON rs.plan_id=p.plan_id JOIN sys.query_store_query q ON p.query_id=q.query_id;'
+                $rows = Convert-DataTableRows (Invoke-QueryTable -ServerObject $server -DatabaseName $db.Name -Query $query)
+                Write-StableCsv -Path (Join-Path $OutputDirectory ("telemetry/databases/" + (Get-SafePathSegment $db.Name) + '/query-store.csv')) -Rows $rows
+            } catch { $metricFailures += [ordered]@{section=$db.Name;error=$_.Exception.Message} }
+        }
+        Write-StableJson -Path (Join-Path $OutputDirectory 'telemetry/collection-status.json') -Value @{failures=@($metricFailures)}
+    }
+
+    $expandedSections = @()
+    foreach ($entry in $script:CollectionSections) {
+        if ($entry.status -eq 'complete' -and $entry.path.StartsWith('databases/')) {
+            $paths = @()
+            if (-not $SkipSchema) { $paths += ($entry.path + '/schema') }
+            if (-not $SkipInventory) { foreach ($leaf in @('database.json','files.csv','filegroups.csv','catalog')) { $paths += ($entry.path + '/' + $leaf) } }
+            foreach ($scope in $paths) {
+                $subset = [ordered]@{}
+                foreach ($key in $entry.files.Keys) { if ($key -eq $scope -or $key.StartsWith($scope + '/')) { $subset[$key] = $entry.files[$key] } }
+                $expandedSections += [ordered]@{path=$scope;status='complete';error='';files=$subset}
+            }
+        } else { $expandedSections += $entry }
+    }
+    $script:CollectionSections = $expandedSections
+    Invoke-CollectionSection 'instance/server.json' { }
+    Invoke-CollectionSection 'collector.json' { }
+    Invoke-CollectionSection 'database-map.csv' { }
+    Save-CollectionManifest -Finalized $true
+    if (@($script:CollectionSections | Where-Object { $_.status -in @('failed','skipped') }).Count -gt 0) {
+        Write-CollectorError 'SQL Server collection partially failed (exit 6)'
+        exit 6
+    }
     Write-CollectorMessage 'SQL Server collection completed successfully'
     exit 0
 }

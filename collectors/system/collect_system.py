@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ConfigBackup guest-system inventory collector.
 
-Creates a deterministic, current-state inventory tree for Windows or Linux.
+Creates a deterministic, current-state inventory tree for Windows, Linux or macOS.
 ConfigBackup is responsible for versioning/history (filesystem, Git, or both).
 
 The collector intentionally avoids collecting secret-bearing environment values,
@@ -15,6 +15,8 @@ import csv
 import json
 import os
 import platform
+import plistlib
+import hashlib
 import re
 import shutil
 import socket
@@ -23,7 +25,10 @@ import sys
 from pathlib import Path
 from typing import Any, Iterable
 
-COLLECTOR_VERSION = "1.5.0"
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from completeness import publish, section
+
+COLLECTOR_VERSION = "1.6.0"
 
 
 def eprint(msg: str) -> None:
@@ -190,6 +195,60 @@ def linux_memory_info() -> dict[str, Any]:
     }
 
 
+def collect_macos(root: Path, args: argparse.Namespace, failures: list[dict[str, str]]) -> None:
+    """Read stable host settings and launchd definitions; never query browser/keychain data."""
+    stable_json(root/'os/os.json', {'hostname':socket.gethostname(), 'architecture':platform.machine(),
+                                  'kernel':platform.release(), 'macos':platform.mac_ver()[0]})
+    commands = {
+        'hardware/settings.txt':['/usr/sbin/sysctl','hw.model','hw.ncpu','hw.memsize','hw.physicalcpu','hw.logicalcpu'],
+        'os/version.txt':['/usr/bin/sw_vers'],
+        'network/hardware-ports.txt':['/usr/sbin/networksetup','-listallhardwareports'],
+        'network/service-order.txt':['/usr/sbin/networksetup','-listnetworkserviceorder'],
+        'software/packages.txt':['/usr/sbin/pkgutil','--pkgs'],
+    }
+    if not args.skip_accounts:
+        commands.update({'security/users.txt':['/usr/bin/dscl','.','-list','/Users','UniqueID'],
+                         'security/groups.txt':['/usr/bin/dscl','.','-list','/Groups','PrimaryGroupID']})
+    if not args.skip_firewall:
+        commands['security/firewall.txt']=['/usr/libexec/ApplicationFirewall/socketfilterfw','--getglobalstate']
+    for name, command in commands.items():
+        try:
+            result=run(command, check=True)
+            text=result.stdout
+            if name in ('software/packages.txt','security/users.txt','security/groups.txt'):
+                text='\n'.join(sorted(text.splitlines()))+'\n'
+            stable_text(root/name,text)
+        except Exception as exc:failures.append({'section':name,'error':str(exc),'required':'false'})
+    directories=[Path('/System/Library/LaunchDaemons'),Path('/System/Library/LaunchAgents'),
+                 Path('/Library/LaunchDaemons'),Path('/Library/LaunchAgents'),Path.home()/'Library/LaunchAgents']
+    for directory in directories:
+        if not directory.exists():continue
+        try:files=sorted(directory.glob('*.plist'))
+        except OSError as exc:
+            failures.append({'section':str(directory),'error':str(exc),'required':'false'});continue
+        for source in files:
+            try:
+                try:
+                    with source.open('rb') as stream:definition=plistlib.load(stream)
+                except Exception:
+                    # Apple's parser accepts some shipped plists with malformed XML headers.
+                    # Convert a read-only stream; never rewrite the source file.
+                    converted=run(['/usr/bin/plutil','-convert','xml1','-o','-',str(source)],check=True)
+                    definition=plistlib.loads(converted.stdout.encode('utf-8'))
+                if not isinstance(definition,dict):raise ValueError('Expected plist dictionary')
+                if 'EnvironmentVariables' in definition:
+                    definition['EnvironmentVariables']={k:'<REDACTED>' for k in definition['EnvironmentVariables']}
+                key=hashlib.sha256(str(source).encode()).hexdigest()
+                stable_json(root/'scheduling/launchd'/(key+'.json'),{'path':str(source),'definition':definition})
+            except Exception as exc:failures.append({'section':str(source),'error':str(exc),'required':'false'})
+    # A user crontab is separate from launchd. Exit 1 with 'no crontab' means empty.
+    try:
+        result=run(['/usr/bin/crontab','-l'])
+        if result.returncode==0:stable_text(root/'scheduling/crontabs/current-user.txt',result.stdout)
+        elif 'no crontab' not in result.stderr.lower():raise RuntimeError(result.stderr)
+    except Exception as exc:failures.append({'section':'crontab','error':str(exc),'required':'false'})
+
+
 def collect_linux(root: Path, args: argparse.Namespace, failures: list[dict[str, str]]) -> None:
     osrel = linux_os_release()
     stable_json(root / "hardware" / "cpu.json", linux_cpu_info())
@@ -317,7 +376,7 @@ def collect_linux(root: Path, args: argparse.Namespace, failures: list[dict[str,
                 timers.append({"unit": name, "unit_state": state,
                                "on_calendar": ";".join(sorted(calendar_specs)),
                                "monotonic": ";".join(sorted(monotonic_specs)),
-                               "randomized_delay": random_delay})
+                               "randomized_delay": random_delay, "service": name.removesuffix(".timer")+".service", "definition": content.stdout})
             stable_csv(root / "scheduling" / "systemd-timers.csv", timers)
 
     # Cron definitions are configuration; copy text but never spool/history.
@@ -330,6 +389,27 @@ def collect_linux(root: Path, args: argparse.Namespace, failures: list[dict[str,
             for p in sorted(d.iterdir(), key=lambda x: x.name):
                 if p.is_file():
                     stable_text(cron_out / "cron.d" / p.name, p.read_text(encoding="utf-8", errors="replace"))
+
+    if command_exists('crontab'):
+        import pwd
+        accounts = pwd.getpwall() if os.geteuid() == 0 else [pwd.getpwuid(os.geteuid())]
+        for account in accounts:
+            cmd=['crontab','-u',account.pw_name,'-l'] if os.geteuid()==0 else ['crontab','-l']
+            cp=run(cmd,timeout=30)
+            if cp.returncode==0:
+                stable_text(cron_out/'users'/(account.pw_name+'.cron'),cp.stdout)
+            elif 'no crontab' not in cp.stderr.lower():
+                failures.append({'section':'scheduling.cron','error':'Cannot read crontab for '+account.pw_name})
+        if os.geteuid()!=0:
+            failures.append({'section':'scheduling.cron','error':'Other users crontabs not accessible without root'})
+    if command_exists('systemctl'):
+        cp=run(['systemctl','--user','list-timers','--all','--no-pager'],timeout=30)
+        if cp.returncode==0:
+            stable_text(root/'telemetry'/'user-timer-status.txt',cp.stdout)
+        for base in [Path('/etc/systemd/user'),Path.home()/'.config/systemd/user']:
+            if base.is_dir():
+                for timer in sorted(base.glob('*.timer')):
+                    stable_text(root/'scheduling'/'user-timers'/timer.name,timer.read_text())
 
     # Installed packages and repositories.
     software = root / "software"
@@ -558,10 +638,21 @@ def collect_windows(root: Path, args: argparse.Namespace, failures: list[dict[st
     if tasks is not None:
         stable_json(root / "scheduling" / "scheduled-tasks.json", tasks)
 
+    task_xml = best_effort("scheduled-task-xml", lambda: run_ps_json(
+        "Get-ScheduledTask | Sort-Object TaskPath,TaskName | ForEach-Object { [pscustomobject]@{TaskPath=$_.TaskPath;TaskName=$_.TaskName;Xml=(Export-ScheduledTask -TaskName $_.TaskName -TaskPath $_.TaskPath -ErrorAction Stop)} }"
+    ), failures)
+    if task_xml is not None:
+        stable_json(root / 'scheduling' / 'task-xml.json', task_xml)
+
     # Optional historical runtimes from Task Scheduler Operational log events
     # 100 (started) and 102 (completed). Only completed matched instances count.
     # Store separately from stable config inventory: this rolls each day.
     if args.include_task_history:
+        event_status = best_effort('scheduled-task-status-events', lambda: run_ps_json(
+            "Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-TaskScheduler/Operational';Id=101,103,107,111,118,119,140,141,142,203;StartTime=(Get-Date).AddDays(-" + str(args.task_history_days) + ")} -MaxEvents 50000 -ErrorAction Stop | ForEach-Object { [pscustomobject]@{Id=$_.Id;TimeCreated=$_.TimeCreated.ToString('o');Xml=$_.ToXml()} }"
+        ), failures)
+        if event_status is not None:
+            stable_json(root / 'telemetry' / 'task-status-events.json', event_status)
         event_query = r"""
 $log='Microsoft-Windows-TaskScheduler/Operational'
 $cutoff=(Get-Date).AddDays(-{days})
@@ -590,7 +681,7 @@ foreach($event in $events){{
         if runtime_rows is not None:
             if isinstance(runtime_rows, dict):
                 runtime_rows = [runtime_rows]
-            stable_csv(root / "scheduling" / "scheduled-task-runs.csv", runtime_rows)
+            stable_csv(root / "telemetry" / "scheduled-task-runs.csv", runtime_rows)
 
     # Installed software from registry (Win32_Product intentionally avoided).
     software = best_effort("software.installed", lambda: run_ps_json(
@@ -734,18 +825,22 @@ foreach ($r in $rules) {
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Collect Windows/Linux guest configuration and inventory")
+    parser = argparse.ArgumentParser(description="Collect Windows/Linux/macOS guest configuration and inventory")
     parser.add_argument("--output", default=os.environ.get("CONFIGBACKUP_OUTPUT"), help="Output directory (defaults to CONFIGBACKUP_OUTPUT)")
     parser.add_argument("--skip-firewall", action="store_true", help="Skip firewall rule/profile collection")
     parser.add_argument("--skip-accounts", action="store_true", help="Skip local users/groups inventory")
     parser.add_argument("--include-task-history", action="store_true", help="Capture Windows Task Scheduler completed-run durations from Operational event log (volatile output)")
     parser.add_argument("--task-history-days", type=int, default=60, help="Task Scheduler history lookback (default: 60 days)")
+    parser.add_argument("--include-performance", action="store_true", help="Collect volatile host statistics outside configuration manifests")
     parser.add_argument("--strict", action="store_true", help="Fail if any best-effort section cannot be collected")
     args = parser.parse_args()
     if not args.output:
         parser.error("--output is required unless CONFIGBACKUP_OUTPUT is set")
     root = Path(args.output).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
+    if any(root.iterdir()):
+        parser.error("Output directory must be empty; use clean_output: true")
+    publish(root, [], finalized=False)
     failures: list[dict[str, str]] = []
 
     stable_json(root / "collector.json", {
@@ -760,6 +855,9 @@ def main() -> int:
         if os.name == "nt":
             info("Collecting Windows guest configuration")
             collect_windows(root, args, failures)
+        elif sys.platform == "darwin":
+            info("Collecting macOS guest configuration")
+            collect_macos(root, args, failures)
         elif sys.platform.startswith("linux"):
             info("Collecting Linux guest configuration")
             collect_linux(root, args, failures)
@@ -771,11 +869,36 @@ def main() -> int:
         stable_json(root / "collection-errors.json", failures)
         return 1
 
+    if args.include_performance:
+        telemetry_failures=[]
+        if os.name=='nt':
+            counters=best_effort('host-performance',lambda:run_ps_json(
+                "Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor | Select-Object Name,PercentProcessorTime; Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory | Select-Object AvailableMBytes,PagesPersec; Get-CimInstance Win32_PerfFormattedData_PerfDisk_LogicalDisk | Select-Object Name,DiskBytesPersec,AvgDisksecPerRead,AvgDisksecPerWrite; Get-CimInstance Win32_PerfFormattedData_Tcpip_NetworkInterface | Select-Object Name,BytesTotalPersec"
+            ),telemetry_failures)
+            if counters is not None:stable_json(root/'telemetry'/'host-counters.json',counters)
+        elif sys.platform == 'darwin':
+            for name, command in {'vm-stat':['/usr/bin/vm_stat'], 'load':['/usr/sbin/sysctl','vm.loadavg']}.items():
+                try:stable_text(root/'telemetry'/(name+'.txt'),run(command,check=True).stdout)
+                except Exception as exc:telemetry_failures.append({'section':name,'error':str(exc)})
+        else:
+            for name in ('stat','meminfo','diskstats','net/dev'):
+                source=Path('/proc')/name
+                try:stable_text(root/'telemetry'/('proc-'+name.replace('/','-')+'.txt'),source.read_text())
+                except OSError as exc:telemetry_failures.append({'section':name,'error':str(exc)})
+        stable_json(root/'telemetry'/'collection-status.json',{'failures':telemetry_failures})
     stable_json(root / "collection-errors.json", failures)
+    # Individual output files are the certified scopes. Missing files are never
+    # evidence of removal when command discovery/access may vary across runs.
+    scopes = [section(root, p.relative_to(root).as_posix()) for p in sorted(root.rglob('*'))
+              if p.is_file() and p.name != 'collection-manifest.json' and 'telemetry' not in p.relative_to(root).parts]
+    if failures:
+        scopes.append(section(root, '_incomplete-discovery', 'failed', 'See collection-errors.json'))
+    publish(root, scopes)
     if failures:
         info(f"Completed with {len(failures)} best-effort collection warning(s)")
         if args.strict:
             return 2
+        return 6
     else:
         info("Collection completed successfully")
     return 0

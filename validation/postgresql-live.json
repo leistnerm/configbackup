@@ -1,0 +1,24 @@
+{
+  "status": "passed",
+  "databases": [
+    "cbtest_4ae8b656_a",
+    "cbtest_4ae8b656_b",
+    "cbtest_4ae8b656_c"
+  ],
+  "determinism": {
+    "comparison_representation_only": 4,
+    "identical": 94,
+    "added": 0,
+    "removed": 0,
+    "changed": 1,
+    "csv_row_order_only": 0
+  },
+  "checks": [
+    "live native dumps",
+    "two-run comparison",
+    "exclusive-lock schema failure",
+    "continue following database",
+    "archive and Git preservation",
+    "recovery next run"
+  ]
+}

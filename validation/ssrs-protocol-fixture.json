@@ -1,0 +1,20 @@
+{
+  "status": "passed",
+  "scope": "simulated SOAP only; no live SSRS server",
+  "checks": [
+    "actual PowerShell HTTP SOAP requests",
+    "definitions and policies",
+    "stable two-run bytes",
+    "narrow runtime-field removal",
+    "one item failure preserves archive and Git",
+    "healthy item updates"
+  ],
+  "determinism": {
+    "comparison_representation_only": 0,
+    "identical": 11,
+    "added": 0,
+    "removed": 0,
+    "changed": 0,
+    "csv_row_order_only": 0
+  }
+}
