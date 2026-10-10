@@ -414,3 +414,7 @@ This writes `instance/agent/job-runs.csv` with job-level execution times/duratio
 ## 2.0 additions
 
 See [read-only-access.md](read-only-access.md) and [release notes](release-2.0.0.md) for new options, tested coverage and limitations.
+
+## Generated password placeholders (2.1.0)
+
+SqlPackage may synthesize random passwords for extracted login/user definitions. ConfigBackup now removes recognized placeholders in fresh native Security creation scripts, replacing them with an invalid SQL marker and a restore instruction. This is an explicit exception to preserving unmodified native SQL: the synthesized literal is not a backup of the source credential. See [scope, failure behavior and restore implications](shared-connections.md#sanitizing-generated-sql-password-placeholders).

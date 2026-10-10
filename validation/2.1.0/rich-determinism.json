@@ -1,0 +1,31 @@
+{
+  "postgresql": {
+    "exit_codes": [
+      0,
+      0
+    ],
+    "database_files_compared": 117,
+    "raw_differences": [
+      "databases/cb_healthy/schema.sql"
+    ],
+    "comparison_differences": [],
+    "file_sets_equal": true,
+    "failed_scopes": []
+  },
+  "sqlserver": {
+    "exit_codes": [
+      6,
+      6
+    ],
+    "database_files_compared": 60,
+    "raw_differences": [],
+    "comparison_differences": [],
+    "file_sets_equal": true,
+    "failed_scopes": [
+      "instance/scripts/Credentials",
+      "instance/scripts/LinkedServers",
+      "instance/scripts/PolicyManagement",
+      "instance/scripts/ReplicationSettings"
+    ]
+  }
+}

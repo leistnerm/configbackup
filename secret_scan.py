@@ -5,6 +5,8 @@ import re
 import zipfile
 
 RULES = {
+    # SQL Unicode literals (N'...') and escaped quotes must not bypass the gate.
+    'sql-password-literal': rb"(?i)\b(?:password|pwd)\s*=\s*N?'((?:[^']|''){4,})'",
     'private-key': rb'-----BEGIN (?:RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----',
     'github-token': rb'\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})',
     'aws-access-key': rb'\bAKIA[A-Z0-9]{16}\b',

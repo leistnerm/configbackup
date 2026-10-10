@@ -1,0 +1,65 @@
+{
+  "status": "passed",
+  "database": "cbtest_access_4e9491e0b0",
+  "engine": "sqlserver",
+  "writes": {
+    "insert": {
+      "rejected": true
+    },
+    "create_table": {
+      "rejected": true
+    },
+    "alter_table": {
+      "rejected": true
+    },
+    "create_agent_job": {
+      "rejected": true
+    }
+  },
+  "managed_backup_exit_code": 4,
+  "collector_exit_code": 6,
+  "certified_database_files": 47,
+  "unavailable_scopes": [
+    "instance/scripts/SpConfigure",
+    "instance/scripts/CustomErrors",
+    "instance/scripts/ServerRoles",
+    "instance/scripts/Credentials",
+    "instance/scripts/Logins",
+    "instance/scripts/DatabaseMail",
+    "instance/scripts/CentralManagementServer",
+    "instance/scripts/BackupDevices",
+    "instance/scripts/LinkedServers",
+    "instance/scripts/SystemTriggers",
+    "instance/scripts/Audits",
+    "instance/scripts/ServerAuditSpecifications",
+    "instance/scripts/Endpoints",
+    "instance/scripts/PolicyManagement",
+    "instance/scripts/ResourceGovernor",
+    "instance/scripts/ExtendedEvents",
+    "instance/scripts/ReplicationSettings",
+    "instance/scripts/SysDbUserObjects",
+    "instance/scripts/AvailabilityGroups",
+    "instance/scripts/OleDbProvider",
+    "instance/agent/jobs",
+    "instance/agent/agent-settings.json",
+    "instance/ssis"
+  ],
+  "diagnostics": {
+    "before_grants": "partial",
+    "after_grants": "partial",
+    "nonexistent_login": "failed",
+    "checks": "CLI JSON/console, real permission changes, temporary real collection, missing login"
+  },
+  "shared": {
+    "required_sections": "ready_with_warnings",
+    "revoked_access": "not_ready",
+    "recovered_access": "ready_with_warnings",
+    "database_files_compared": 47,
+    "comparison_differences": [],
+    "all_database_comparisons_equal": true,
+    "sanitized_login_scripts": 1,
+    "sanitized_scripts_require_new_password": true,
+    "launcher_identity_verified": true
+  },
+  "cleanup": "passed"
+}

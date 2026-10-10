@@ -1,0 +1,181 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-10-10T02:58:50.855039+00:00",
+  "name": "fixture",
+  "engine": "postgresql",
+  "access_profile": "read-only",
+  "connection": {
+    "status": "connected",
+    "database": "postgres",
+    "identity": "cbtest_access_d4a627627e",
+    "version": "17.11 (Debian 17.11-1.pgdg13+2)",
+    "permissions": {
+      "superuser": false,
+      "bypass_rls": true,
+      "pg_monitor": true,
+      "pg_read_all_data": true
+    }
+  },
+  "status": "complete",
+  "sections": [
+    {
+      "section": "cluster",
+      "status": "available",
+      "files_verified": 7,
+      "verified_paths": [
+        "cluster/database-role-settings.csv",
+        "cluster/databases.csv",
+        "cluster/globals.sql",
+        "cluster/role-memberships.csv",
+        "cluster/roles.csv",
+        "cluster/server.json",
+        "cluster/tablespaces.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "config",
+      "status": "available",
+      "files_verified": 4,
+      "verified_paths": [
+        "config/pg-file-settings.csv",
+        "config/pg-hba-file-rules.csv",
+        "config/pg-ident-file-mappings.csv",
+        "config/pg-settings.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "replication",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "replication/slots.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "databases/cbtest_access_d4a627627e/database.json",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "databases/cbtest_access_d4a627627e/database.json"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "databases/cbtest_access_d4a627627e/inventory",
+      "status": "available",
+      "files_verified": 15,
+      "verified_paths": [
+        "databases/cbtest_access_d4a627627e/inventory/column-grants.csv",
+        "databases/cbtest_access_d4a627627e/inventory/columns.csv",
+        "databases/cbtest_access_d4a627627e/inventory/dependencies.csv",
+        "databases/cbtest_access_d4a627627e/inventory/event-triggers.csv",
+        "databases/cbtest_access_d4a627627e/inventory/extensions.csv",
+        "databases/cbtest_access_d4a627627e/inventory/foreign-data-wrappers.csv",
+        "databases/cbtest_access_d4a627627e/inventory/foreign-servers.csv",
+        "databases/cbtest_access_d4a627627e/inventory/languages.csv",
+        "databases/cbtest_access_d4a627627e/inventory/partitions.csv",
+        "databases/cbtest_access_d4a627627e/inventory/policies.csv",
+        "databases/cbtest_access_d4a627627e/inventory/schemas.csv",
+        "databases/cbtest_access_d4a627627e/inventory/sequences.csv",
+        "databases/cbtest_access_d4a627627e/inventory/table-grants.csv",
+        "databases/cbtest_access_d4a627627e/inventory/tables.csv",
+        "databases/cbtest_access_d4a627627e/inventory/user-mapping-options.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "databases/cbtest_access_d4a627627e/objects",
+      "status": "available",
+      "files_verified": 8,
+      "verified_paths": [
+        "databases/cbtest_access_d4a627627e/objects/constraints/_manifest.csv",
+        "databases/cbtest_access_d4a627627e/objects/constraints/public/proof_pkey__68e13e73.sql",
+        "databases/cbtest_access_d4a627627e/objects/indexes/_manifest.csv",
+        "databases/cbtest_access_d4a627627e/objects/indexes/public/proof_pkey.sql",
+        "databases/cbtest_access_d4a627627e/objects/materialized-views/_manifest.csv",
+        "databases/cbtest_access_d4a627627e/objects/routines/_manifest.csv",
+        "databases/cbtest_access_d4a627627e/objects/triggers/_manifest.csv",
+        "databases/cbtest_access_d4a627627e/objects/views/_manifest.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "databases/cbtest_access_d4a627627e/replication",
+      "status": "available",
+      "files_verified": 2,
+      "verified_paths": [
+        "databases/cbtest_access_d4a627627e/replication/publications.csv",
+        "databases/cbtest_access_d4a627627e/replication/subscriptions.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "databases/cbtest_access_d4a627627e/schema.sql",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "databases/cbtest_access_d4a627627e/schema.sql"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "database-map.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "database-map.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "collector.json",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "collector.json"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "optional health telemetry",
+      "status": "not_tested",
+      "reason": "Not requested by this diagnostic profile."
+    },
+    {
+      "section": "external service adapters and remote host configuration",
+      "status": "not_tested",
+      "reason": "SSRS/SSAS/WSFC adapters and remote operating-system privileges need separate tests."
+    },
+    {
+      "section": "additional opt-in collector features",
+      "status": "not_tested",
+      "reason": "Physical-index scans, selected pgstattuple targets, raw config files, legacy SSIS and custom connection options are outside this diagnostic profile."
+    }
+  ],
+  "scope_note": "Uses the managed backup task connection, selection, environment and working directory. Exports are disposable; archive, Git and permission changes are not executed. Running this launcher manually does not prove scheduler execution.",
+  "collector_exit_code": 0,
+  "execution": {
+    "platform": "Darwin",
+    "python": "/Users/mark/Documents/Codex/2026-10-09/referenced-chatgpt-conversation-this-is-an/work/venv/bin/python",
+    "working_directory": "/Users/mark/Documents/Codex/2026-10-09/referenced-chatgpt-conversation-this-is-an/work/v210-pg-shared",
+    "launcher_mode": "diagnostic",
+    "scheduler_proven": false,
+    "uid": 501,
+    "effective_uid": 501,
+    "account": "mark"
+  },
+  "requirements": [
+    {
+      "pattern": "databases/cbtest_access_d4a627627e/schema*",
+      "status": "passed",
+      "matched": 1,
+      "unavailable": {},
+      "reason": ""
+    }
+  ],
+  "readiness": "ready",
+  "guided_fixes": []
+}

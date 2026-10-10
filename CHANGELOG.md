@@ -1,3 +1,13 @@
+# 2.1.0 — 2026-10-09
+
+- Added shared named database connections consumed by managed backup tasks and diagnostics; retained legacy execute wrappers/profiles. Shared SQL parameter mapping and PostgreSQL argument construction eliminate duplicate settings.
+- Added required manifest-scope/file checks, reviewed guidance/access-script generation, selective database/section tests and explicit metadata-only reporting. Required failures mark a run incomplete while verified independent scopes remain eligible for archival.
+- Added diagnostic/setup launchers with private per-run reports, effective OS/database identity and runtime capability baselines that retain successful evidence through failures; new monitoring rules consume aggregate readiness telemetry outside configuration/Git.
+- Added setup probes for path write/read/free space, executable/credential presence, Git remote read and optional SMTP TLS/login without delivery. A separate explicit CLI action sends a harmless test notification.
+- Added shared-path live SQL/PostgreSQL permission revocation/recovery, repeat comparison and launcher tests, Windows scheduled-task correlation helper and staged lab plan. Sanitize recognized SqlPackage-generated login/contained-user password literals to a stable, deliberately non-executable restore marker before manifest hashing. Unrecognized password-bearing creation syntax fails that database safely. See VALIDATION.md for exact coverage and platform limitations.
+- Fixed secret-gate detection of SQL Unicode password literals and quoted passwords containing escaped quotes/spaces. Passwords in arbitrary external SQL still require review before Git publication.
+- Fixed the integration harness to mark late assertion failures as failed instead of retaining an earlier success status.
+
 # 2.0.1 — 2026-10-09
 
 - Added guided database diagnostic profiles and `configure.py --diagnose-database NAME` with optional protected JSON reports.

@@ -29,3 +29,7 @@ SQL integrated authentication and PostgreSQL peer/Kerberos avoid password inject
 Choose **Generate database access scripts**. Supply an existing dedicated login/role and database names as a JSON list. Output contains no credentials. Review the generated SQL and `READ-BEFORE-APPLY.txt`, then have an administrator apply it. See [read-only coverage and audits](read-only-access.md).
 
 References: [GitHub CLI authentication](https://cli.github.com/manual/gh_auth_login), [Microsoft Get-Secret](https://learn.microsoft.com/powershell/module/microsoft.powershell.secretmanagement/get-secret?view=ps-modules), [SqlPackage authentication](https://learn.microsoft.com/sql/tools/sqlpackage/sqlpackage).
+
+## Shared connections and readiness (2.1.0)
+
+See [shared connections](shared-connections.md) and the [Windows lab plan](windows-integration-lab.md).

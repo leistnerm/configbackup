@@ -39,7 +39,7 @@ except ImportError:  # pragma: no cover
 from completeness import Coverage, MANIFEST
 
 APP_NAME = "ConfigBackup"
-APP_VERSION = "2.0.1"
+APP_VERSION = "2.1.0"
 STATE_VERSION = 1
 PHASES = ["pre_run", "pre_backup", "backup", "post_backup", "post_run"]
 TASK_TYPES = {"execute", "command", "file", "directory", "glob"}
@@ -397,6 +397,12 @@ class ConfigLoader:
             if section in cfg and cfg[section] is not None and not isinstance(cfg[section], dict):
                 raise ConfigError(f"{section} must be a mapping")
 
+        from database_connections import validate_connections
+        try:
+            validate_connections(cfg)
+        except (ValueError, TypeError) as exc:
+            raise ConfigError(str(exc)) from exc
+
         variables_raw = cfg.get("variables") or {}
         variables = {str(k): str(v) for k, v in variables_raw.items()}
         # Resolve config variables recursively a few times so variables may reference variables.
@@ -525,6 +531,11 @@ class ConfigLoader:
         if task_type not in TASK_TYPES:
             raise ConfigError(f"Task {name!r} has invalid type {task_type!r}")
         result["type"] = task_type
+        from database_connections import prepare
+        try:
+            result = prepare(result, cfg)
+        except (ValueError, TypeError) as exc:
+            raise ConfigError(str(exc)) from exc
         default_phase = "pre_backup" if task_type == "execute" else "backup"
         result.setdefault("phase", default_phase)
         result.setdefault("required", True)
@@ -1954,6 +1965,18 @@ class BackupEngine:
             result.message = "Collector sections failed; successful scopes remain eligible"
         elif completed.returncode != 0:
             raise RuntimeError(f"Command returned exit code {completed.returncode}")
+        if task.get('required_sections'):
+            from readiness import requirements
+            coverage = Coverage(output_dir, self.run_id)
+            evidence = {'connection': {'status': 'connected'}, 'status': 'complete', 'sections': [
+                {'section': scope['path'], 'status': 'available' if scope['status']=='complete' else scope['status'],
+                 'verified_paths': list(scope.get('files',{})) if scope['status']=='complete' else []}
+                for scope in coverage.sections]}
+            requirements(evidence, task['required_sections'])
+            missing = [row['pattern'] for row in evidence['requirements'] if row['status']=='failed']
+            if missing:
+                result.status = 'partial'
+                result.message = 'Required collection sections not verified: ' + ', '.join(missing)
 
     def _task_command(self, task: dict[str, Any], result: TaskResult) -> None:
         if self.dry_run:
@@ -1994,6 +2017,13 @@ class BackupEngine:
         env.update(self.variables_for_task(task))
         env["CONFIGBACKUP_SECTIONS"] = json.dumps(task.get("sections") or {})
         cwd = task.get("working_directory") or None
+        if '_database_profile' in task:
+            from database_connections import collect
+            self.logger.info("Collecting shared connection %s for task %s", task['connection'], task['name'])
+            try:
+                return collect(task['_database_profile'], env['CONFIGBACKUP_OUTPUT'], env, cwd)
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError('Database collection timed out; child process tree stopped') from exc
         stderr_mode = task.get("stderr", "log")
         stderr_target: Any
         if stderr_mode == "discard":

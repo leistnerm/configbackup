@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-10-10T02:58:47.899166+00:00",
+  "name": "fixture",
+  "engine": "postgresql",
+  "access_profile": "read-only",
+  "connection": {
+    "status": "connected",
+    "database": "postgres",
+    "identity": "cbtest_access_d4a627627e",
+    "version": "17.11 (Debian 17.11-1.pgdg13+2)",
+    "permissions": {
+      "superuser": false,
+      "bypass_rls": true,
+      "pg_monitor": false,
+      "pg_read_all_data": true
+    }
+  },
+  "status": "incomplete",
+  "sections": [
+    {
+      "section": "configuration",
+      "status": "not_tested",
+      "reason": "No valid finalized collector manifest; no section can be certified."
+    },
+    {
+      "section": "collector preflight",
+      "status": "unavailable",
+      "reason": "Full visibility requires superuser, or --read-only-access with pg_monitor, pg_read_all_data and BYPASSRLS; hidden objects must not be certified"
+    },
+    {
+      "section": "optional health telemetry",
+      "status": "not_tested",
+      "reason": "Not requested by this diagnostic profile."
+    },
+    {
+      "section": "external service adapters and remote host configuration",
+      "status": "not_tested",
+      "reason": "SSRS/SSAS/WSFC adapters and remote operating-system privileges need separate tests."
+    },
+    {
+      "section": "additional opt-in collector features",
+      "status": "not_tested",
+      "reason": "Physical-index scans, selected pgstattuple targets, raw config files, legacy SSIS and custom connection options are outside this diagnostic profile."
+    }
+  ],
+  "scope_note": "Uses the managed backup task connection, selection, environment and working directory. Exports are disposable; archive, Git and permission changes are not executed. Running this launcher manually does not prove scheduler execution.",
+  "collector_exit_code": 1,
+  "execution": {
+    "platform": "Darwin",
+    "python": "/Users/mark/Documents/Codex/2026-10-09/referenced-chatgpt-conversation-this-is-an/work/venv/bin/python",
+    "working_directory": "/Users/mark/Documents/Codex/2026-10-09/referenced-chatgpt-conversation-this-is-an/outputs/configbackup-2.1.0",
+    "launcher_mode": "direct",
+    "scheduler_proven": false,
+    "uid": 501,
+    "effective_uid": 501,
+    "account": "mark"
+  },
+  "requirements": [
+    {
+      "pattern": "databases/cbtest_access_d4a627627e/schema*",
+      "status": "failed",
+      "matched": 0,
+      "unavailable": {},
+      "reason": "No verified scope/file matched; absent, disabled and untested are not success."
+    }
+  ],
+  "readiness": "not_ready",
+  "guided_fixes": [
+    {
+      "id": "postgres-read-access",
+      "action": "Missing observed capabilities: pg_monitor. Generate the PostgreSQL read-access script for administrator review. pg_read_all_data and BYPASSRLS grant broad cluster-wide read visibility, not just the selected databases.",
+      "applied": false
+    },
+    {
+      "id": "section-failure",
+      "action": "Read the unavailable section reason below. Check that feature installation, database visibility and native extraction are supported by this server/client combination. Retest the affected database; metadata-only success does not prove native schema extraction.",
+      "applied": false
+    },
+    {
+      "id": "required-sections",
+      "action": "Resolve failed required-section checks, or deliberately revise required_sections after reviewing what is needed. Disabled/not-applicable sections do not satisfy a requirement.",
+      "applied": false
+    }
+  ],
+  "capabilities": {
+    "baseline": "625702e739cd7f25013b4c8bc667918898f24cc19afb9c0ad7285d72253a4181",
+    "initialized": false,
+    "lost": [],
+    "unverified": [
+      "cluster",
+      "collector.json",
+      "config",
+      "database-map.csv",
+      "databases/cbtest_access_d4a627627e/database.json",
+      "databases/cbtest_access_d4a627627e/inventory",
+      "databases/cbtest_access_d4a627627e/objects",
+      "databases/cbtest_access_d4a627627e/replication",
+      "databases/cbtest_access_d4a627627e/schema.sql",
+      "replication"
+    ],
+    "gained": [],
+    "recovered": [],
+    "database_identity_changed": false
+  }
+}

@@ -25,6 +25,10 @@ from notifications import send
 
 UTC = dt.timezone.utc
 DEFAULT_RULES = [
+    {'id':'capability-lost','metric':'diagnostics.capability.lost_count','op':'gt','warning':0,'clear':0,'consecutive':1},
+    {'id':'capability-unverified','metric':'diagnostics.capability.unverified_count','op':'gt','warning':0,'clear':0,'consecutive':1},
+    {'id':'readiness-failed','metric':'diagnostics.capability.not_ready_count','op':'gt','warning':0,'clear':0,'consecutive':1},
+    {'id':'database-identity-change','metric':'diagnostics.capability.identity_changed_count','op':'gt','warning':0,'clear':0,'consecutive':1},
     {'id':'disk-free-percent','metric':'*.volume.free_percent','op':'lt','warning':15,'critical':5,'clear':18},
     {'id':'local-disk-free-percent','metric':'system.disk.free_percent','op':'lt','warning':15,'critical':5,'clear':18},
     {'id':'local-disk-free-bytes','metric':'system.disk.free_bytes','op':'lt','warning':10*1024**3,'critical':2*1024**3,'clear':12*1024**3},

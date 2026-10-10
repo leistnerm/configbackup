@@ -35,7 +35,7 @@ from completeness import publish, section
 from telemetry import utcnow
 from sections import enabled as section_enabled
 
-COLLECTOR_VERSION = "2.0.1"
+COLLECTOR_VERSION = "2.1.0"
 
 
 class CollectorError(RuntimeError):

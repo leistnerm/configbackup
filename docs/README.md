@@ -23,3 +23,7 @@ Start with the project-level `README.md` and `configbackup.example.yaml`, then u
 - [Host/storage/firewall/SMART coverage](host-coverage.md)
 
 - [Database connection/access diagnostics](database-diagnostics.md)
+
+## Shared connections and readiness (2.1.0)
+
+See [shared connections](shared-connections.md) and the [Windows lab plan](windows-integration-lab.md).

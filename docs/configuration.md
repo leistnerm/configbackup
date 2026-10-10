@@ -345,3 +345,7 @@ A backup task dependent on a suppressed `execute` collector is skipped in dry-ru
 ## 2.0 additions
 
 See [configuration-tools.md](configuration-tools.md) and [release notes](release-2.0.0.md) for new options, tested coverage and limitations.
+
+## Shared connections and readiness (2.1.0)
+
+See [shared connections](shared-connections.md) and the [Windows lab plan](windows-integration-lab.md).

@@ -30,14 +30,5 @@ try {
 }
 $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $ScratchDirectory 'connection.json') -Encoding UTF8
 if($report.status -ne 'connected'){exit 1}
-$argsForCollector=@{SqlInstance=[string]$p.server;OutputDirectory=(Join-Path $ScratchDirectory 'snapshot');SkipHostConfiguration=$true;ConnectTimeout=$connect.ConnectTimeout}
-if($credential){$argsForCollector.SqlCredential=$credential}
-if($p.trust_server_certificate){$argsForCollector.TrustServerCertificate=$true}
-if($p.databases){$argsForCollector.Database=@($p.databases)}
-if($p.sqlpackage){$argsForCollector.SqlPackagePath=[string]$p.sqlpackage}
-if(-not $p.access_profile -or $p.access_profile -eq 'read-only'){$argsForCollector.ReadOnlyAccess=$true}
-if($p.PSObject.Properties.Name -contains 'schema' -and -not $p.schema){$argsForCollector.SkipSchema=$true}
-if($p.include_health){$argsForCollector.IncludeHealthMetrics=$true}
-if($p.include_history){$argsForCollector.IncludeAgentHistory=$true}
-& (Join-Path $PSScriptRoot 'Collect-SqlServerConfiguration.ps1') @argsForCollector
+& (Join-Path $PSScriptRoot 'Invoke-ProfileCollection.ps1') -ProfileFile $ProfileFile -OutputDirectory (Join-Path $ScratchDirectory 'snapshot')
 exit $LASTEXITCODE

@@ -14,7 +14,7 @@
     dbatools instance scripts by default.
 
 .NOTES
-    Collector version: 2.0.1
+    Collector version: 2.1.0
     Requires:
       - PowerShell 5.1+ (PowerShell 7+ recommended)
       - dbatools PowerShell module
@@ -117,7 +117,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$CollectorVersion = '2.0.1'
+$CollectorVersion = '2.1.0'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Write-CollectorMessage {
@@ -504,6 +504,10 @@ function Invoke-SqlPackageExtract {
             }
             throw "SqlPackage failed for database '$DatabaseName' with exit code $exitCode."
         }
+        # Only this fresh, successful native extraction has trusted provenance.
+        . (Join-Path $PSScriptRoot 'Remove-DacFxPlaceholderPasswords.ps1')
+        $removed=Remove-DacFxPlaceholderPasswords -ExtractDirectory $TargetDirectory
+        if($removed -gt 0){Write-CollectorMessage "Removed $removed generated password placeholder(s); corresponding login/user scripts require a new secure password before execution."}
     }
     finally {
         Remove-Item -LiteralPath $diagnosticsFile -Force -ErrorAction SilentlyContinue
@@ -1555,6 +1559,7 @@ try {
         DbatoolsVersion       = if ($null -ne $loadedDbatools) { $loadedDbatools.Version.ToString() } else { $null }
         SqlPackageVersion     = $sqlPackageVersion
         SchemaExtraction      = (-not $SkipSchema)
+        RemoveGeneratedPasswordPlaceholders = $true
         VerifySchemaExtraction = [bool]$VerifySchemaExtraction
         SortSchemaElementsByName = (-not [bool]$DisableSchemaElementSorting)
         InstanceExport        = (-not $SkipInstanceExport)
