@@ -1,0 +1,2 @@
+Parsed 10 PowerShell scripts; failures: 0
+Parsed 49 Python files and 23 YAML files; shared example validates.

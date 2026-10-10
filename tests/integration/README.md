@@ -71,3 +71,9 @@ For optional database health, populate the templates below in NEW disposable dat
 ## Configuration CLI diagnostics
 
 Add `--diagnostics` to `read_only_access_live.py` commands above to exercise the actual CLI before grants, after grants and with a nonexistent login. Results are written as sanitized JSON reports, and temporary identities/databases are removed. Diagnostic runtime is additional to the original grant/extraction test.
+
+## Shared connections and readiness (2.1.0)
+
+See [shared connection usage](../../docs/shared-connections.md) and [Windows lab requirements](../../docs/windows-integration-lab.md). Run `read_only_access_live.py --diagnostics --shared` to exercise managed collection, before/after/revoked/recovered permissions, required sections, capability history, repeat comparison and the generated launcher. Repeat differences are explicitly reported and fail the shared test. For SQL, it also verifies the generated password marker is rejected by PARSEONLY and does not trigger the secret gate.
+
+`Test-DacFxSanitizer.ps1 -OutputDirectory <fresh directory>` executes the actual sanitizer against standalone login/contained-user scripts, quoted identifiers/literals, unrelated SQL, repeated runs and unsupported syntax. It performs no database writes.

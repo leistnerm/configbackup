@@ -171,6 +171,7 @@ def summarize(scratch, result, env):
     for scope in coverage.sections:
         result['sections'].append({'section': scope['path'], 'status': mapping[scope['status']],
                                    'files_verified': len(scope.get('files', {})) if scope['status'] == 'complete' else 0,
+                                   'verified_paths': sorted(scope.get('files', {})) if scope['status'] == 'complete' else [],
                                    'reason': sanitize(scope.get('error', ''), env)})
     # Runtime probes are outside the configuration manifest, and must not be
     # reported successful merely because the configuration collection succeeded.
@@ -186,9 +187,9 @@ def summarize(scratch, result, env):
     result['status'] = 'partial' if result.get('collector_exit_code') or any(row['status'] == 'unavailable' for row in result['sections']) else 'complete'
 
 
-def diagnose(profile, progress=None):
+def diagnose(profile, progress=None, environment=None):
     validate(profile)
-    env = os.environ.copy()
+    env = dict(os.environ if environment is None else environment)
     env.pop('CONFIGBACKUP_OUTPUT', None)
     env['CONFIGBACKUP_SECTIONS'] = json.dumps(profile.get('sections', {}))
     env['PGCONNECT_TIMEOUT'] = str(profile.get('connect_timeout', 10))

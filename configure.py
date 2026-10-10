@@ -101,14 +101,10 @@ def template_tasks(kind, input_fn=input):
     root=Path(__file__).resolve().parent
     output='${CONFIGBACKUP_STAGING}/'+name
     common={'name':name,'enabled':True,'type':'execute','output_directory':output,'clean_output':True,'sections':{}}
-    if kind=='SQL Server':
-        endpoint=ask('SQL instance or host,port',input_fn=input_fn)
-        common.update(executable=ask('PowerShell executable','pwsh',input_fn),arguments=['-NoProfile','-File',str(root/'collectors/sqlserver/Collect-SqlServerConfiguration.ps1'),'-SqlInstance',endpoint,'-IncludeHealthMetrics','-IncludeAgentHistory'])
-        print('Uses the process authentication context. SQL credentials require your protected credential wrapper; do not put passwords in arguments.')
-    elif kind=='PostgreSQL':
-        host=ask('Host','127.0.0.1',input_fn);port=ask('Port','5432',input_fn)
-        common.update(executable=ask('Python executable','python3',input_fn),arguments=[str(root/'collectors/postgresql/collect_postgresql.py'),'--host',host,'--port',port,'--include-health','--include-scheduler-history'])
-        print('Use libpq service/.pgpass or protected environment authentication.')
+    if kind in ('SQL Server','PostgreSQL'):
+        common['connection']=ask('Existing shared connection name (add it in Shared connections first)',input_fn=input_fn)
+        common['collection']={}
+        common['required_sections']=json_value('Required manifest scope/file patterns',[],input_fn)
     elif kind=='System':
         common.update(executable=ask('Python executable','python3',input_fn),arguments=[str(root/'collectors/system/collect_system.py'),'--include-performance'])
     else:raise ValueError('Unknown template')
@@ -216,8 +212,12 @@ def launcher_wizard(path,input_fn=input):
     if provider!='existing':
         while boolean('Add a secret reference (never enter its value here)',not secrets,input_fn):
             secrets.append({'env':ask('Environment variable (e.g. GH_TOKEN)',input_fn=input_fn),'name':ask('Secret name/service in the vault',input_fn=input_fn)})
+    mode=choice('Launcher action',['backup','diagnostic','setup'],input_fn) or 'backup'
+    task=ask('Managed database task name',input_fn=input_fn) if mode=='diagnostic' else ''
+    reports=ask('Private report directory',input_fn=input_fn) if mode!='backup' else ''
+    history=ask('Optional runtime capability state directory (blank to disable)',input_fn=input_fn) if mode=='diagnostic' else ''
     files=generate(path,ask('Fresh launcher output directory',input_fn=input_fn),target,
-                   ask('Python executable path/name','python' if target=='windows' else 'python3',input_fn),provider,secrets,vault,account)
+                   ask('Python executable path/name','python' if target=='windows' else 'python3',input_fn),provider,secrets,vault,account,mode,task,reports,history)
     print('Generated: '+', '.join(str(p) for p in files)+'. Read AUTH-SETUP.txt. Configuration edits must be saved separately.')
 
 
@@ -236,7 +236,7 @@ def access_wizard(input_fn=input):
 def diagnostic_profile(input_fn=input):
     engine=choice('Database engine',['sqlserver','postgresql'],input_fn)
     if not engine:return None
-    profile={'name':ask('Unique diagnostic profile name',input_fn=input_fn),'engine':engine,
+    profile={'name':ask('Unique connection/profile name',input_fn=input_fn),'engine':engine,
              'access_profile':choice('Use the same access profile as your collector',['read-only','full'],input_fn) or 'read-only'}
     if engine=='sqlserver':
         profile['server']=ask('SQL instance or host,port',input_fn=input_fn)
@@ -289,12 +289,37 @@ def diagnostics_wizard(config,input_fn=input):
             if path:write_report(result,path);print('Saved diagnostic report: '+path)
 
 
+def shared_connections_wizard(config,path,input_fn=input):
+    from readiness import run_task,display
+    connections=config.setdefault('connections',{})
+    while True:
+        action=choice('Shared connections',['Add connection','Edit connection','Test managed task','Remove connection','Back'],input_fn)
+        if action in (None,'Back'):return
+        if action=='Add connection':
+            profile=diagnostic_profile(input_fn)
+            if profile:
+                name=profile.pop('name')
+                if not name or name in connections:raise ValueError('Choose a new nonempty connection name')
+                connections[name]=profile
+        elif action=='Test managed task':
+            names=[t['name'] for t in config.get('tasks',[]) if t.get('connection')]
+            if not names:print('Add a SQL Server/PostgreSQL task using an existing shared connection first.');continue
+            name=choice('Managed task',names,input_fn)
+            if name:display(run_task(config,path,name,progress=print))
+        else:
+            if not connections:print('No shared connections configured.');continue
+            name=choice('Connection',list(connections),input_fn)
+            if name is None:continue
+            if action=='Edit connection':edit_mapping(connections[name],input_fn)
+            else:del connections[name]
+
+
 def wizard(config,path,kind,input_fn=input):
     original=copy.deepcopy(config)
     while True:
         choices=['Tasks','Monitoring sources','Alert rules','Notification channels','Global switches','Show configuration','Validate','Save','Quit without saving'] if kind=='backup' else ['Sources','Report/analysis settings','Show configuration','Validate','Save','Quit without saving'] if kind=='schedule' else ['Monitoring sources','Alert rules','Notification channels','Global switches','Show configuration','Validate','Save','Quit without saving']
         if kind=='registry':choices=['Registry selections','Default registry selections','Show configuration','Validate','Save','Quit without saving']
-        if kind=='backup':choices.insert(5,'Generate startup launcher');choices.insert(6,'Generate database access scripts');choices.insert(7,'Database connection tests')
+        if kind=='backup':choices.insert(5,'Generate startup launcher');choices.insert(6,'Generate database access scripts');choices.insert(7,'Database connection tests');choices.insert(8,'Shared connections');choices.insert(9,'Check setup')
         action=choice('ConfigBackup configuration editor',choices,input_fn)
         if action in (None,'Quit without saving'):return False
         try:
@@ -303,6 +328,10 @@ def wizard(config,path,kind,input_fn=input):
             elif action=='Generate startup launcher':launcher_wizard(path,input_fn)
             elif action=='Generate database access scripts':access_wizard(input_fn)
             elif action=='Database connection tests':diagnostics_wizard(config,input_fn)
+            elif action=='Shared connections':shared_connections_wizard(config,path,input_fn)
+            elif action=='Check setup':
+                from setup_checks import run
+                print(json.dumps(run(config,path),indent=2))
             elif action=='Default registry selections':config['include_defaults']=boolean('Include the built-in selected settings',config.get('include_defaults',True),input_fn)
             elif action=='Tasks':
                 manage(config.setdefault('tasks',[]),'Backup tasks',lambda inp:template_tasks(choice('Task template',['Directory','SQL Server','PostgreSQL','System'],inp),inp),input_fn)
@@ -341,18 +370,66 @@ def main(argv=None):
     parser.add_argument('--check',action='store_true',help='Validate without opening the wizard')
     parser.add_argument('--diagnose-database',metavar='PROFILE',help='Run a named database_diagnostics profile in disposable scratch space')
     parser.add_argument('--diagnostic-report',help='Optional new JSON output file; never overwritten')
+    parser.add_argument('--diagnose-task',metavar='TASK',help='Test the exact managed backup task connection and environment')
+    parser.add_argument('--database',action='append',help='Limit diagnostics to a database name/pattern; repeatable')
+    parser.add_argument('--skip-section',action='append',default=[],help='Disable a section name/pattern for this test only; repeatable')
+    parser.add_argument('--metadata-only',action='store_true',help='Skip native schema extraction, with explicit not-tested status')
+    parser.add_argument('--capability-history',help='Private runtime directory for capability baselines and monitoring telemetry')
+    parser.add_argument('--report-directory',help='Write a uniquely named private JSON report each run (scheduler launchers)')
+    parser.add_argument('--setup-check',action='store_true',help='Check local paths/tools, credential references, Git remote read and notification configuration')
+    parser.add_argument('--probe-notifications',action='store_true',help='With --setup-check, test SMTP TLS/login without sending mail')
+    parser.add_argument('--test-notification',metavar='CHANNEL',help='Explicitly SEND one harmless test to an enabled channel')
+    parser.add_argument('--generate-access-fix',metavar='DIRECTORY',help='With --diagnose-task, generate read-access SQL for review; never apply it')
+    parser.add_argument('--principal',help='Existing database principal for generated permission script; defaults to connection user')
     args=parser.parse_args(argv);path=Path(args.config)
     config=yaml.safe_load(path.read_text()) if path.exists() else {}
     config=config or {}
-    if args.check and args.diagnose_database:parser.error('Choose --check or --diagnose-database')
-    if args.diagnostic_report and not args.diagnose_database:parser.error('--diagnostic-report requires --diagnose-database')
+    modes=[args.check,args.diagnose_database,args.diagnose_task,args.setup_check,args.test_notification]
+    if sum(bool(x) for x in modes)>1:parser.error('Choose one check, diagnostic, setup or notification action')
+    if (args.diagnostic_report or args.report_directory) and not (args.diagnose_database or args.diagnose_task or args.setup_check):parser.error('Report output requires a diagnostic or setup action')
+    if args.diagnostic_report and args.report_directory:parser.error('Choose a report file or a report directory')
+    if (args.database or args.skip_section or args.metadata_only or args.capability_history or args.generate_access_fix or args.principal) and not args.diagnose_task:parser.error('Task selection/history/fix options require --diagnose-task')
+    if args.probe_notifications and not args.setup_check:parser.error('--probe-notifications requires --setup-check')
+    def report(result):
+        from database_diagnostics import write_report
+        target=args.diagnostic_report
+        if args.report_directory:
+            import uuid
+            directory=Path(args.report_directory);directory.mkdir(parents=True,exist_ok=True,mode=0o700)
+            target=directory/('readiness-'+dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%S')+'-'+uuid.uuid4().hex+'.json')
+        if target:write_report(result,target);print('Saved report: '+str(target))
+    if args.test_notification:
+        from setup_checks import test_notification
+        try:test_notification(config,args.test_notification)
+        except Exception:print('Notification test failed; inspect channel settings and credentials. Raw provider response omitted.');return 1
+        print('Test notification submitted. Verify receipt at the destination.');return 0
+    if args.setup_check:
+        from setup_checks import run
+        result=run(config,path,args.probe_notifications);print(json.dumps(result,indent=2));report(result)
+        return 0 if result['status']=='complete' else 6
+    if args.diagnose_task:
+        from readiness import run_task,display
+        try:
+            result=run_task(config,path,args.diagnose_task,args.database,args.skip_section,args.metadata_only,args.capability_history,print)
+            display(result);report(result)
+            if args.generate_access_fix:
+                from database_connections import task_context
+                from access_scripts import generate
+                task,_=task_context(config,path,args.diagnose_task);profile=task['_database_profile']
+                principal=args.principal or profile.get('user');databases=args.database or profile.get('databases',[])
+                if not principal or not databases or any(any(c in name for c in '*?[') for name in databases):
+                    raise ValueError('Fix scripts need an explicit principal and literal database names; supply --principal and --database')
+                paths=generate(profile['engine'],principal,databases,args.generate_access_fix)
+                print('Generated for administrator review only: '+', '.join(map(str,paths)))
+        except (ValueError,OSError,ConfigError) as exc:print('Readiness error:',exc);return 2
+        return 1 if result['readiness']=='not_ready' else 6 if result['readiness']=='ready_with_warnings' else 0
     if args.diagnose_database:
         from database_diagnostics import diagnose,display,write_report
         matches=[p for p in config.get('database_diagnostics',[]) if p.get('name')==args.diagnose_database]
         if len(matches)!=1:parser.error('Choose a unique database_diagnostics profile name')
         try:
             result=diagnose(matches[0],progress=print);display(result)
-            if args.diagnostic_report:write_report(result,args.diagnostic_report)
+            report(result)
         except (ValueError,OSError) as exc:print('Diagnostic error:',exc);return 2
         return 0 if result['status'] in ('complete','disabled') else 6 if result['status']=='partial' else 1
     if args.check:validate(config,args.kind);print('Configuration valid');return 0

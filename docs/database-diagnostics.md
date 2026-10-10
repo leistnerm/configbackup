@@ -39,3 +39,7 @@ This proves an outcome at the recorded time for that profile and account, not fu
 The console always identifies external service adapters/remote host configuration as not tested. Existing tasks can have additional options; do not treat this profile as a complete audit of arbitrary task arguments. Unsupported fields are rejected instead of silently ignored.
 
 Use [the example profiles](../examples/database-diagnostics.yaml) and [validation results](../VALIDATION.md). The portable read-access integration test has a `--diagnostics` option that checks the actual CLI before grants, after grants, and with a nonexistent login on disposable servers.
+
+## Shared connections and readiness (2.1.0)
+
+See [shared connections](shared-connections.md) and the [Windows lab plan](windows-integration-lab.md).

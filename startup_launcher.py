@@ -8,7 +8,7 @@ import shlex
 def ps(value):return "'"+str(value).replace("'","''")+"'"
 
 
-def generate(config,directory,platform_name,python,provider='existing',secrets=(),vault='',account=''):
+def generate(config,directory,platform_name,python,provider='existing',secrets=(),vault='',account='',mode='backup',task='',report_directory='',history=''):
     if platform_name not in ('windows','macos','linux'):raise ValueError('Unknown launcher platform')
     if provider not in ('existing','keychain','secret-service','powershell-vault'):raise ValueError('Unknown secret provider')
     if provider=='powershell-vault' and platform_name!='windows':raise ValueError('PowerShell vault launcher requires Windows')
@@ -27,6 +27,15 @@ def generate(config,directory,platform_name,python,provider='existing',secrets=(
     if provider=='keychain' and not account:raise ValueError('Keychain account name required')
     config=Path(config).absolute();directory=Path(directory).absolute();directory.mkdir(parents=True,exist_ok=True)
     engine=Path(__file__).resolve().with_name('configbackup.py')
+    if mode not in ('backup','diagnostic','setup'):raise ValueError('Unknown launcher mode')
+    if mode=='diagnostic' and not task:raise ValueError('Diagnostic launcher requires a managed task name')
+    if mode!='backup' and not report_directory:raise ValueError('A private report directory is required')
+    command=[python,str(engine),'--config',str(config)]
+    if mode!='backup':
+        command=[python,str(engine.with_name('configure.py')),'--config',str(config),
+                 *(['--diagnose-task',task] if mode=='diagnostic' else ['--setup-check']),
+                 '--report-directory',str(Path(report_directory).absolute())]
+        if history:command+=['--capability-history',str(Path(history).absolute())]
     files={}
     guidance=['Launchers contain references only. No passwords or tokens were requested or saved.',
       'Use the same OS account for setup and scheduled execution; unlock/access to the selected vault must work unattended.',
@@ -46,7 +55,7 @@ def generate(config,directory,platform_name,python,provider='existing',secrets=(
             guidance.extend([f'For {item["env"]}, use an already registered non-interactive vault:',
                 '$value = Read-Host '+ps('Secret for '+item['name'])+' -AsSecureString',
                 f'Set-Secret -Name {secret} -Vault {ps(vault)} -Secret $value', '$value = $null'])
-        lines += [f"    Set-Location -LiteralPath {ps(config.parent)}",f"    & {ps(python)} {ps(engine)} --config {ps(config)}", "    $result = $LASTEXITCODE",
+        lines += [f"    Set-Location -LiteralPath {ps(config.parent)}","    $env:CONFIGBACKUP_LAUNCH_MODE = "+ps(mode), "    & "+" ".join(ps(arg) for arg in command), "    $result = $LASTEXITCODE",
                   "} catch {", "    [Console]::Error.WriteLine('ConfigBackup startup failed; check paths and vault access without printing credentials.')", "} finally {",
                   "    foreach ($name in $previous.Keys) { [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process') }", "}", "exit $result"]
         files['run-configbackup.ps1']='\n'.join(lines)+'\n'
@@ -62,8 +71,9 @@ def generate(config,directory,platform_name,python,provider='existing',secrets=(
             if provider=='keychain':
                 guidance.append('Add a generic password in Keychain Access with account '+account+' and service '+item['name']+'. Enter its value in the password field; never supply it as a command-line argument.')
             else:guidance.append('Store interactively (enter the secret at the prompt): '+shlex.join(['secret-tool','store','--label=ConfigBackup '+item['name'],'application','ConfigBackup','name',item['name']]))
-        lines+=['cd '+q(str(config.parent)),'exec '+shlex.join([python,str(engine),'--config',str(config)])]
+        lines+=['cd '+q(str(config.parent)),'export CONFIGBACKUP_LAUNCH_MODE='+q(mode),'exec '+shlex.join(command)]
         files['run-configbackup.sh']='\n'.join(lines)+'\n'
+    if mode!='backup':guidance.append('This launcher writes a fresh private report each run. Run it through the actual scheduler and account, then inspect execution identity and scheduler history together. Manual launch alone does not prove scheduled-account access. Protect the report directory; Windows requires an account-only NTFS ACL. Reports are not automatically pruned.')
     files['AUTH-SETUP.txt']='\n\n'.join(guidance)+'\n'
     if any((directory/name).exists() for name in files):raise ValueError('Launcher files already exist; choose a fresh directory')
     created=[]

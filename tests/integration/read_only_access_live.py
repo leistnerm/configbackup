@@ -37,6 +37,7 @@ def main():
     parser.add_argument('--module-path')
     parser.add_argument('--sqlpackage')
     parser.add_argument('--diagnostics', action='store_true', help='Also test the configuration CLI diagnostics before/after grants and with a nonexistent login')
+    parser.add_argument('--shared',action='store_true',help='Exercise shared managed collection, readiness launcher, capability history and repeat determinism')
     args = parser.parse_args()
     if not args.confirm_disposable_server:
         parser.error('--confirm-disposable-server is required')
@@ -114,15 +115,32 @@ if($Mode -eq 'create-reader') {
                            str(ROOT / 'collectors/sqlserver/Collect-SqlServerConfiguration.ps1'),
                            '-OutputDirectory', str(out / 'snapshot'), '-SqlPackage', args.sqlpackage])
 
-    def diagnostic(label, user=None):
-        profile={'name':'fixture','engine':args.engine,'user':user or name,'password_env':'CB_TEST_DIAGNOSTIC_PASSWORD',
+    def shared_config(user=None,output=None):
+        profile={'engine':args.engine,'user':user or name,'password_env':'CB_TEST_DIAGNOSTIC_PASSWORD',
                  'databases':[name],'access_profile':'read-only','timeout':600}
         if args.engine=='postgresql':profile.update(host=args.host,port=args.port,bin_dir=args.bin_dir)
         else:profile.update(server=args.server,pwsh=args.pwsh,sqlpackage=args.sqlpackage,trust_server_certificate=True)
-        path=out/(label+'-config.json');path.write_text(json.dumps({'database_diagnostics':[profile]}))
+        return {'backup':{'root':str(out/'archive')},'connections':{'fixture':profile},
+                'tasks':[{'name':'fixture','type':'execute','connection':'fixture',
+                          'output_directory':str(output or out/'snapshot'),
+                          'required_sections':['databases/'+name+'/schema*', *(['instance/catalog/configuration.csv'] if args.engine=='sqlserver' else [])]}]}
+
+    def managed_collect(output):
+        path=out/'managed-config.json';path.write_text(json.dumps(shared_config(output=output)))
+        cp=subprocess.run([sys.executable,str(ROOT/'configbackup.py'),'--config',str(path)],
+                          env={**env,'CB_TEST_DIAGNOSTIC_PASSWORD':password},capture_output=True,text=True,timeout=660)
+        result['managed_backup_exit_code']=cp.returncode
+        if cp.returncode==4:cp.returncode=6
+        return cp
+
+    def diagnostic(label, user=None):
+        config=shared_config(user)
+        if not args.shared:
+            config={'database_diagnostics':[dict(config['connections']['fixture'],name='fixture')]}
+        path=out/(label+'-config.json');path.write_text(json.dumps(config))
         report=out/(label+'-report.json')
         with (out/(label+'.log')).open('w') as log:
-            cp=subprocess.run([sys.executable,str(ROOT/'configure.py'),'--config',str(path),'--diagnose-database','fixture','--diagnostic-report',str(report)],
+            cp=subprocess.run([sys.executable,str(ROOT/'configure.py'),'--config',str(path),('--diagnose-task' if args.shared else '--diagnose-database'),'fixture','--diagnostic-report',str(report),*(['--capability-history',str(out/'capabilities')] if args.shared else [])],
                               env={**env,'CB_TEST_DIAGNOSTIC_PASSWORD':password},stdout=log,stderr=subprocess.STDOUT,timeout=660)
         data=json.loads(report.read_text())
         assert cp.returncode in (0,1,6),label
@@ -166,7 +184,7 @@ if($Mode -eq 'create-reader') {
             result['writes']['create_agent_job'] = {'rejected': rejected}
             if not rejected:
                 raise AssertionError('SQL Agent job creation unexpectedly permitted')
-        cp = collect()
+        cp = managed_collect(out/'snapshot') if args.shared else collect()
         log = cp.stdout + cp.stderr
         for value in (password, env.get('CB_TEST_ADMIN_PASSWORD', '')):
             if value:
@@ -190,8 +208,57 @@ if($Mode -eq 'create-reader') {
             assert not any(r['status']=='available' for r in failed['sections'])
             result['diagnostics']={'before_grants':before['status'],'after_grants':after['status'],
                                    'nonexistent_login':failed['connection']['status'],'checks':'CLI JSON/console, real permission changes, temporary real collection, missing login'}
+            if args.shared:
+                assert after['readiness'] in ('ready','ready_with_warnings'),after['requirements']
+                # Same profile and account; revocation must preserve the prior baseline.
+                if args.engine=='postgresql':query('REVOKE pg_monitor FROM '+name+';')
+                else:query('REVOKE VIEW ANY DEFINITION FROM ['+name+'];')
+                revoked=diagnostic('revoked-access')
+                assert revoked['readiness']=='not_ready'
+                assert revoked['capabilities']['lost'] or revoked['capabilities']['unverified']
+                if args.engine=='postgresql':query('GRANT pg_monitor TO '+name+';')
+                else:query('GRANT VIEW ANY DEFINITION TO ['+name+'];')
+                recovered=diagnostic('recovered-access')
+                assert recovered['readiness'] in ('ready','ready_with_warnings')
+                assert not recovered['capabilities']['lost'] and not recovered['capabilities']['unverified']
+                cp=managed_collect(out/'repeat');assert cp.returncode in (0,6)
+                repeat=Coverage(out/'repeat');assert set(coverage.files)==set(repeat.files)
+                from collectors.common.canonicalize import convert
+                differences=[];compared=0
+                for file in paths:
+                    left=out/'snapshot'/file;right=out/'repeat'/file
+                    if left.suffix.lower() in ('.sql','.xml','.json','.dtsx'):
+                        equal=convert(left)==convert(right)
+                    else:equal=left.read_bytes()==right.read_bytes()
+                    compared+=1
+                    if not equal:differences.append(file)
+                result['shared']={'required_sections':after['readiness'],'revoked_access':revoked['readiness'],
+                    'recovered_access':recovered['readiness'],'database_files_compared':compared,'comparison_differences':differences}
+                result['shared']['all_database_comparisons_equal']=not bool(differences)
+                if differences:raise AssertionError('Database comparison output changed between identical runs')
+                if args.engine=='sqlserver':
+                    scripts=[out/'snapshot'/file for file in paths if '/schema/Security/' in file and '<CONFIGBACKUP_PASSWORD_REMOVED>' in (out/'snapshot'/file).read_text()]
+                    assert scripts,'Expected a sanitized generated login script'
+                    for script in scripts:
+                        assert query('SET PARSEONLY ON;\n'+script.read_text(),check=False).returncode!=0,'Removed password marker must not be executable SQL'
+                    from secret_scan import scan_bytes
+                    assert all(not scan_bytes(script.read_bytes(),script.name) for script in scripts)
+                    result['shared']['sanitized_login_scripts']=len(scripts)
+                    result['shared']['sanitized_scripts_require_new_password']=True
+
+                import startup_launcher
+                config_path=out/'launcher-config.json';config_path.write_text(json.dumps(shared_config()))
+                startup_launcher.generate(config_path,out/'launcher','windows' if os.name=='nt' else 'macos' if sys.platform=='darwin' else 'linux',sys.executable,
+                    mode='diagnostic',task='fixture',report_directory=str(out/'launcher-reports'))
+                launcher_command=[args.pwsh,'-NoProfile','-NonInteractive','-File',str(out/'launcher/run-configbackup.ps1')] if os.name=='nt' else ['/bin/sh',str(out/'launcher/run-configbackup.sh')]
+                cp=subprocess.run(launcher_command,env={**env,'CB_TEST_DIAGNOSTIC_PASSWORD':password},capture_output=True,text=True,timeout=660)
+                assert cp.returncode in (0,6)
+                report=json.loads(next((out/'launcher-reports').glob('*.json')).read_text())
+                assert report['connection']['identity']==name and report['execution']['launcher_mode']=='diagnostic'
+                result['shared']['launcher_identity_verified']=True
+
     except Exception as exc:
-        result['error'] = str(exc)
+        result.update(status='failed',error=type(exc).__name__+': '+str(exc))
     finally:
         try:
             if created_database:

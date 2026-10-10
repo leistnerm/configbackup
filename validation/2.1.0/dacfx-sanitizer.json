@@ -1,0 +1,11 @@
+{
+  "status": "passed",
+  "cases": [
+    "login and contained-user placeholders removed",
+    "escaped identifiers and literals",
+    "non-executable restore marker",
+    "unrelated comments/procedures unchanged",
+    "byte-stable repeated transformation",
+    "unknown native password syntax fails closed"
+  ]
+}

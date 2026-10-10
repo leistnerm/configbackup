@@ -1,0 +1,632 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-10-10T03:14:50.353484+00:00",
+  "name": "fixture",
+  "engine": "sqlserver",
+  "access_profile": "read-only",
+  "connection": {
+    "status": "connected",
+    "identity": "cbtest_access_4e9491e0b0",
+    "permissions": {
+      "sysadmin": false,
+      "view_any_definition": true,
+      "view_any_database": true,
+      "view_server_state": true
+    }
+  },
+  "status": "partial",
+  "sections": [
+    {
+      "section": "instance/catalog/availability-databases.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/catalog/availability-databases.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/catalog/availability-groups.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/catalog/availability-groups.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/catalog/availability-listener-addresses.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/catalog/availability-listener-addresses.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/catalog/availability-listeners.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/catalog/availability-listeners.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/catalog/availability-replicas.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/catalog/availability-replicas.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/catalog/availability-routing.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/catalog/availability-routing.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/catalog/cluster-identity.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/catalog/cluster-identity.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/catalog/configuration.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/catalog/configuration.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/catalog/credentials.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/catalog/credentials.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/catalog/database-features.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/catalog/database-features.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/catalog/endpoints.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/catalog/endpoints.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/catalog/features.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/catalog/features.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/catalog/fulltext-document-types.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/catalog/fulltext-document-types.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/catalog/fulltext-languages.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/catalog/fulltext-languages.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/catalog/linked-servers.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/catalog/linked-servers.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/catalog/server-permissions.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/catalog/server-permissions.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/catalog/server-principals.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/catalog/server-principals.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/catalog/server-role-members.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/catalog/server-role-members.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/catalog/services.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/catalog/services.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/catalog/tcp-endpoints.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/catalog/tcp-endpoints.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/scripts/SpConfigure",
+      "status": "unavailable",
+      "files_verified": 0,
+      "verified_paths": [],
+      "reason": "Complete visibility unavailable with this account; privileged scripts/services preserved. ReadOnlyAccess supports checked catalogs and explicit Agent catalog reads."
+    },
+    {
+      "section": "instance/scripts/CustomErrors",
+      "status": "unavailable",
+      "files_verified": 0,
+      "verified_paths": [],
+      "reason": "Complete visibility unavailable with this account; privileged scripts/services preserved. ReadOnlyAccess supports checked catalogs and explicit Agent catalog reads."
+    },
+    {
+      "section": "instance/scripts/ServerRoles",
+      "status": "unavailable",
+      "files_verified": 0,
+      "verified_paths": [],
+      "reason": "Complete visibility unavailable with this account; privileged scripts/services preserved. ReadOnlyAccess supports checked catalogs and explicit Agent catalog reads."
+    },
+    {
+      "section": "instance/scripts/Credentials",
+      "status": "unavailable",
+      "files_verified": 0,
+      "verified_paths": [],
+      "reason": "Complete visibility unavailable with this account; privileged scripts/services preserved. ReadOnlyAccess supports checked catalogs and explicit Agent catalog reads."
+    },
+    {
+      "section": "instance/scripts/Logins",
+      "status": "unavailable",
+      "files_verified": 0,
+      "verified_paths": [],
+      "reason": "Complete visibility unavailable with this account; privileged scripts/services preserved. ReadOnlyAccess supports checked catalogs and explicit Agent catalog reads."
+    },
+    {
+      "section": "instance/scripts/DatabaseMail",
+      "status": "unavailable",
+      "files_verified": 0,
+      "verified_paths": [],
+      "reason": "Complete visibility unavailable with this account; privileged scripts/services preserved. ReadOnlyAccess supports checked catalogs and explicit Agent catalog reads."
+    },
+    {
+      "section": "instance/scripts/CentralManagementServer",
+      "status": "unavailable",
+      "files_verified": 0,
+      "verified_paths": [],
+      "reason": "Complete visibility unavailable with this account; privileged scripts/services preserved. ReadOnlyAccess supports checked catalogs and explicit Agent catalog reads."
+    },
+    {
+      "section": "instance/scripts/BackupDevices",
+      "status": "unavailable",
+      "files_verified": 0,
+      "verified_paths": [],
+      "reason": "Complete visibility unavailable with this account; privileged scripts/services preserved. ReadOnlyAccess supports checked catalogs and explicit Agent catalog reads."
+    },
+    {
+      "section": "instance/scripts/LinkedServers",
+      "status": "unavailable",
+      "files_verified": 0,
+      "verified_paths": [],
+      "reason": "Complete visibility unavailable with this account; privileged scripts/services preserved. ReadOnlyAccess supports checked catalogs and explicit Agent catalog reads."
+    },
+    {
+      "section": "instance/scripts/SystemTriggers",
+      "status": "unavailable",
+      "files_verified": 0,
+      "verified_paths": [],
+      "reason": "Complete visibility unavailable with this account; privileged scripts/services preserved. ReadOnlyAccess supports checked catalogs and explicit Agent catalog reads."
+    },
+    {
+      "section": "instance/scripts/Audits",
+      "status": "unavailable",
+      "files_verified": 0,
+      "verified_paths": [],
+      "reason": "Complete visibility unavailable with this account; privileged scripts/services preserved. ReadOnlyAccess supports checked catalogs and explicit Agent catalog reads."
+    },
+    {
+      "section": "instance/scripts/ServerAuditSpecifications",
+      "status": "unavailable",
+      "files_verified": 0,
+      "verified_paths": [],
+      "reason": "Complete visibility unavailable with this account; privileged scripts/services preserved. ReadOnlyAccess supports checked catalogs and explicit Agent catalog reads."
+    },
+    {
+      "section": "instance/scripts/Endpoints",
+      "status": "unavailable",
+      "files_verified": 0,
+      "verified_paths": [],
+      "reason": "Complete visibility unavailable with this account; privileged scripts/services preserved. ReadOnlyAccess supports checked catalogs and explicit Agent catalog reads."
+    },
+    {
+      "section": "instance/scripts/PolicyManagement",
+      "status": "unavailable",
+      "files_verified": 0,
+      "verified_paths": [],
+      "reason": "Complete visibility unavailable with this account; privileged scripts/services preserved. ReadOnlyAccess supports checked catalogs and explicit Agent catalog reads."
+    },
+    {
+      "section": "instance/scripts/ResourceGovernor",
+      "status": "unavailable",
+      "files_verified": 0,
+      "verified_paths": [],
+      "reason": "Complete visibility unavailable with this account; privileged scripts/services preserved. ReadOnlyAccess supports checked catalogs and explicit Agent catalog reads."
+    },
+    {
+      "section": "instance/scripts/ExtendedEvents",
+      "status": "unavailable",
+      "files_verified": 0,
+      "verified_paths": [],
+      "reason": "Complete visibility unavailable with this account; privileged scripts/services preserved. ReadOnlyAccess supports checked catalogs and explicit Agent catalog reads."
+    },
+    {
+      "section": "instance/scripts/ReplicationSettings",
+      "status": "unavailable",
+      "files_verified": 0,
+      "verified_paths": [],
+      "reason": "Complete visibility unavailable with this account; privileged scripts/services preserved. ReadOnlyAccess supports checked catalogs and explicit Agent catalog reads."
+    },
+    {
+      "section": "instance/scripts/SysDbUserObjects",
+      "status": "unavailable",
+      "files_verified": 0,
+      "verified_paths": [],
+      "reason": "Complete visibility unavailable with this account; privileged scripts/services preserved. ReadOnlyAccess supports checked catalogs and explicit Agent catalog reads."
+    },
+    {
+      "section": "instance/scripts/AvailabilityGroups",
+      "status": "unavailable",
+      "files_verified": 0,
+      "verified_paths": [],
+      "reason": "Complete visibility unavailable with this account; privileged scripts/services preserved. ReadOnlyAccess supports checked catalogs and explicit Agent catalog reads."
+    },
+    {
+      "section": "instance/scripts/OleDbProvider",
+      "status": "unavailable",
+      "files_verified": 0,
+      "verified_paths": [],
+      "reason": "Complete visibility unavailable with this account; privileged scripts/services preserved. ReadOnlyAccess supports checked catalogs and explicit Agent catalog reads."
+    },
+    {
+      "section": "instance/agent/jobs.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/agent/jobs.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/agent/job-steps.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/agent/job-steps.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/agent/schedules.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/agent/schedules.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/agent/schedule-jobs.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/agent/schedule-jobs.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/agent/operators.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/agent/operators.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/agent/alerts.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/agent/alerts.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/agent/categories.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/agent/categories.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/agent/jobs",
+      "status": "unavailable",
+      "files_verified": 0,
+      "verified_paths": [],
+      "reason": "Native Agent script export requires full service visibility; direct catalogs collected instead"
+    },
+    {
+      "section": "instance/agent/agent-settings.json",
+      "status": "unavailable",
+      "files_verified": 0,
+      "verified_paths": [],
+      "reason": "Agent service settings are not certified by read-only catalog access"
+    },
+    {
+      "section": "instance/ssis",
+      "status": "unavailable",
+      "files_verified": 0,
+      "verified_paths": [],
+      "reason": "Complete visibility unavailable with this account; privileged scripts/services preserved. ReadOnlyAccess supports checked catalogs and explicit Agent catalog reads."
+    },
+    {
+      "section": "databases/cbtest_access_4e9491e0b0/schema",
+      "status": "available",
+      "files_verified": 9,
+      "verified_paths": [
+        "databases/cbtest_access_4e9491e0b0/schema/Security/Permission.sql",
+        "databases/cbtest_access_4e9491e0b0/schema/Security/Permission_1.sql",
+        "databases/cbtest_access_4e9491e0b0/schema/Security/Permission_2.sql",
+        "databases/cbtest_access_4e9491e0b0/schema/Security/Permission_3.sql",
+        "databases/cbtest_access_4e9491e0b0/schema/Security/Permission_4.sql",
+        "databases/cbtest_access_4e9491e0b0/schema/Security/Permission_5.sql",
+        "databases/cbtest_access_4e9491e0b0/schema/Security/cbtest_access_4e9491e0b0.sql",
+        "databases/cbtest_access_4e9491e0b0/schema/Security/cbtest_access_4e9491e0b0_1.sql",
+        "databases/cbtest_access_4e9491e0b0/schema/dbo/Tables/proof.sql"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "databases/cbtest_access_4e9491e0b0/database.json",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "databases/cbtest_access_4e9491e0b0/database.json"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "databases/cbtest_access_4e9491e0b0/files.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "databases/cbtest_access_4e9491e0b0/files.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "databases/cbtest_access_4e9491e0b0/filegroups.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "databases/cbtest_access_4e9491e0b0/filegroups.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "databases/cbtest_access_4e9491e0b0/catalog",
+      "status": "available",
+      "files_verified": 35,
+      "verified_paths": [
+        "databases/cbtest_access_4e9491e0b0/catalog/check-constraints.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/column-encryption-keys.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/column-key-mappings.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/column-master-keys.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/columns.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/compression.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/computed-columns.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/file-configuration.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/foreign-keys.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/fulltext-catalogs.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/fulltext-columns.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/fulltext-indexes.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/fulltext-stopwords.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/hash-indexes.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/identity-columns.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/index-columns.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/indexes.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/masked-columns.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/merge-articles.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/merge-publications.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/native-modules.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/partition-boundaries.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/partition-functions.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/partition-schemes.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/permissions.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/principals.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/replication-articles.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/replication-publications.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/replication-subscriptions.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/role-members.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/scoped-configuration.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/search-properties.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/security-policies.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/security-predicates.csv",
+        "databases/cbtest_access_4e9491e0b0/catalog/tables.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "instance/server.json",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "instance/server.json"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "collector.json",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "collector.json"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "database-map.csv",
+      "status": "available",
+      "files_verified": 1,
+      "verified_paths": [
+        "database-map.csv"
+      ],
+      "reason": ""
+    },
+    {
+      "section": "optional health telemetry",
+      "status": "not_tested",
+      "reason": "Not requested by this diagnostic profile."
+    },
+    {
+      "section": "external service adapters and remote host configuration",
+      "status": "not_tested",
+      "reason": "SSRS/SSAS/WSFC adapters and remote operating-system privileges need separate tests."
+    },
+    {
+      "section": "additional opt-in collector features",
+      "status": "not_tested",
+      "reason": "Physical-index scans, selected pgstattuple targets, raw config files, legacy SSIS and custom connection options are outside this diagnostic profile."
+    }
+  ],
+  "scope_note": "Uses the managed backup task connection, selection, environment and working directory. Exports are disposable; archive, Git and permission changes are not executed. Running this launcher manually does not prove scheduler execution.",
+  "collector_exit_code": 6,
+  "execution": {
+    "host": "MacBookProM3.local",
+    "platform": "Darwin",
+    "python": "/Users/mark/Documents/Codex/2026-10-09/referenced-chatgpt-conversation-this-is-an/work/venv/bin/python",
+    "working_directory": "/Users/mark/Documents/Codex/2026-10-09/referenced-chatgpt-conversation-this-is-an",
+    "launcher_mode": "direct",
+    "scheduler_proven": false,
+    "uid": 501,
+    "effective_uid": 501,
+    "account": "mark"
+  },
+  "requirements": [
+    {
+      "pattern": "databases/cbtest_access_4e9491e0b0/schema*",
+      "status": "passed",
+      "matched": 10,
+      "unavailable": {},
+      "reason": ""
+    },
+    {
+      "pattern": "instance/catalog/configuration.csv",
+      "status": "passed",
+      "matched": 1,
+      "unavailable": {},
+      "reason": ""
+    }
+  ],
+  "readiness": "ready_with_warnings",
+  "guided_fixes": [
+    {
+      "id": "protected-exports",
+      "action": "Protected native instance/SSIS exports can remain unavailable under read-only access. Keep prior snapshots; use a separately reviewed privileged service collector only if needed. Do not grant sysadmin merely to make this check green.",
+      "applied": false
+    },
+    {
+      "id": "section-failure",
+      "action": "Read the unavailable section reason below. Check that feature installation, database visibility and native extraction are supported by this server/client combination. Retest the affected database; metadata-only success does not prove native schema extraction.",
+      "applied": false
+    }
+  ],
+  "capabilities": {
+    "baseline": "0ffe8aceb89c889890760206619aa9e590a660c9aba730b082c8dd0677bdb8cd",
+    "initialized": false,
+    "lost": [],
+    "unverified": [],
+    "gained": [],
+    "recovered": [
+      "instance/agent/alerts.csv",
+      "instance/agent/categories.csv",
+      "instance/agent/job-steps.csv",
+      "instance/agent/jobs.csv",
+      "instance/agent/operators.csv",
+      "instance/agent/schedule-jobs.csv",
+      "instance/agent/schedules.csv",
+      "instance/catalog/availability-databases.csv",
+      "instance/catalog/availability-groups.csv",
+      "instance/catalog/availability-listener-addresses.csv",
+      "instance/catalog/availability-listeners.csv",
+      "instance/catalog/availability-replicas.csv",
+      "instance/catalog/availability-routing.csv",
+      "instance/catalog/cluster-identity.csv",
+      "instance/catalog/configuration.csv",
+      "instance/catalog/credentials.csv",
+      "instance/catalog/database-features.csv",
+      "instance/catalog/endpoints.csv",
+      "instance/catalog/features.csv",
+      "instance/catalog/fulltext-document-types.csv",
+      "instance/catalog/fulltext-languages.csv",
+      "instance/catalog/linked-servers.csv",
+      "instance/catalog/server-permissions.csv",
+      "instance/catalog/server-principals.csv",
+      "instance/catalog/server-role-members.csv",
+      "instance/catalog/services.csv",
+      "instance/catalog/tcp-endpoints.csv"
+    ],
+    "database_identity_changed": false
+  }
+}

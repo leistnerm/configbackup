@@ -1,0 +1,10 @@
+{
+  "status": "passed",
+  "scheduler": "macOS launchd",
+  "os_account": "mark",
+  "effective_uid": 501,
+  "database_identity": "postgres",
+  "readiness": "ready",
+  "scheduler_proven_by_harness": true,
+  "temporary_job_removed": true
+}

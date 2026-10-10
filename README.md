@@ -1,4 +1,4 @@
-# ConfigBackup 2.0.1
+# ConfigBackup 2.1.0
 
 Read [the 2.0.0 migration and safety notes](docs/release-2.0.0.md) before upgrading. The engine and collectors must be upgraded together. See [validation evidence](VALIDATION.md) for tested and unverified behavior.
 
@@ -7,6 +7,8 @@ Read [the 2.0.0 migration and safety notes](docs/release-2.0.0.md) before upgrad
 ConfigBackup is a Python 3 utility for preserving configuration files, generated configuration snapshots, database schema dumps, and other text/binary artifacts over time.
 
 It is designed to run once and exit, making it suitable for **Windows Task Scheduler**, **cron**, or a **systemd timer**. It does not contain its own scheduler and does not connect to SQL Server or any other database directly. External collector scripts can do that work and ConfigBackup can archive their output.
+
+See [shared connections and readiness](docs/shared-connections.md) for the new managed connection tasks, guided fixes, required sections, capability alerts and scheduled-account launchers. See the [Windows integration lab plan](docs/windows-integration-lab.md) for the remaining live platform matrix.
 
 ## Key features
 
