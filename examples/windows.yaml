@@ -45,6 +45,7 @@ tasks:
 
   - name: system-inventory
     type: directory
+    collection_manifest: true
     source: ${SYSTEM_STAGING}
     destination: system
     depends_on: [collect-system]

@@ -1,3 +1,5 @@
+> **1.6.0:** [Migration, changed behavior, new options, and limitations](release-1.6.0.md) supersede older descriptions below, especially collector failure handling, telemetry paths, and time zones.
+
 # SQL Server / Agent / SSIS collector
 
 `collectors/sqlserver/Collect-SqlServerConfiguration.ps1` builds a deterministic current-state SQL Server configuration tree. SQL logic remains outside the Python ConfigBackup engine; ConfigBackup only archives or Git-commits the collector's output.

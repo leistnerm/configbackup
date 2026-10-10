@@ -11,6 +11,9 @@ import csv
 import hashlib
 import json
 from pathlib import Path
+import sys
+sys.path.insert(0,str(Path(__file__).parent))
+from canonicalize import convert
 
 
 def csv_canonical(path: Path):
@@ -31,16 +34,21 @@ def collect(root:Path):
 
 def audit(left:Path,right:Path)->dict:
     a=collect(left);b=collect(right)
-    changed=[];added=[];removed=[];same=[];order_only=[]
+    changed=[];added=[];removed=[];same=[];order_only=[];representation_only=[]
     for key in sorted(set(a)|set(b)):
         if key not in a:added.append(key);continue
         if key not in b:removed.append(key);continue
         if a[key].read_bytes()==b[key].read_bytes():same.append(key);continue
         if key.lower().endswith('.csv') and csv_canonical(a[key])==csv_canonical(b[key]):
             order_only.append(key)
-        else:changed.append(key)
-    return {'identical':same,'added':added,'removed':removed,'changed':changed,'csv_row_order_only':order_only,
-            'counts':{'identical':len(same),'added':len(added),'removed':len(removed),'changed':len(changed),'csv_row_order_only':len(order_only)}}
+        else:
+            try:
+                equivalent=a[key].suffix in {'.sql','.xml','.dtsx','.json'} and convert(a[key])==convert(b[key])
+            except (ValueError,UnicodeError, OSError): equivalent=False
+            if equivalent:representation_only.append(key)
+            else:changed.append(key)
+    return {'comparison_representation_only':representation_only,'identical':same,'added':added,'removed':removed,'changed':changed,'csv_row_order_only':order_only,
+            'counts':{'comparison_representation_only':len(representation_only),'identical':len(same),'added':len(added),'removed':len(removed),'changed':len(changed),'csv_row_order_only':len(order_only)}}
 
 
 def main():

@@ -73,6 +73,8 @@ tasks:
 
   - name: archive-postgresql
     type: directory
+    collection_manifest: true
+    git_canonicalize: true
     source: ${PG_STAGING}
     destination: postgresql
     depends_on: [collect-postgresql]

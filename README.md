@@ -1,3 +1,7 @@
+# ConfigBackup 1.6.0
+
+Read [the 1.6.0 migration and safety notes](docs/release-1.6.0.md) before upgrading. The engine and collectors must be upgraded together. See [validation evidence](VALIDATION.md) for tested and unverified behavior.
+
 # ConfigBackup
 
 ConfigBackup is a Python 3 utility for preserving configuration files, generated configuration snapshots, database schema dumps, and other text/binary artifacts over time.
@@ -6,7 +10,7 @@ It is designed to run once and exit, making it suitable for **Windows Task Sched
 
 ## Key features
 
-- Windows and Linux support.
+- Windows, Linux and macOS support for the core engine; collector/service coverage varies (see VALIDATION.md).
 - Individual files, directories, and recursive glob patterns (`**`).
 - Preserves the source directory hierarchy when no explicit destination is supplied.
 - Optional hostname segment in the backup path.
@@ -37,7 +41,7 @@ It is designed to run once and exit, making it suitable for **Windows Task Sched
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.10+ (requirements include Windows IANA time-zone data)
 - PyYAML 6.x
 
 Install the dependency:
@@ -318,7 +322,7 @@ Retention runs automatically only when required tasks complete successfully, and
 - `docs/state-and-recovery.md` — state files, run manifests, interrupted runs, and recovery behavior.
 - `SECURITY.md` — credential handling, sensitive collected content, and destructive-operation safeguards.
 - `docs/sql-server-collector.md` — SqlPackage + dbatools SQL Server collector, SQL Agent, SSISDB, and optional legacy SSIS.
-- `docs/system-collector.md` — Windows/Linux guest hardware, storage, software, patch, service, networking, and configuration inventory.
+- `docs/system-collector.md` — Windows/Linux/macOS guest hardware, storage, software, patch, service, networking, and configuration inventory.
 - `docs/git-storage.md` — Git/GitHub/GitLab/Azure DevOps storage, commits, remotes, authentication, and binary-file guidance.
 
 ## Design notes

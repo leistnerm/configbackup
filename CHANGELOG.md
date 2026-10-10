@@ -1,3 +1,18 @@
+# 1.6.0 — 2026-10-09
+
+- Isolate SQL Server/PostgreSQL database collection; preserve failed and unreported archive/Git scopes with finalized hashed manifests and partial status.
+- Commit healthy tasks independently; roll back caught storage errors within their own task; reject case-colliding portable paths.
+- Expand partitioning, RLS/masking, temporal, In-Memory OLTP, columnstore, full-text, replication and availability-group catalog inventories.
+- Add optional SSRS/SSAS/WSFC service adapters with explicit validation limits.
+- Add macOS/launchd inventory and calendar analysis, named-instance identity with shared-host concurrency, and min/mean/P90/max statistics.
+- Run SQL inventory per database; move file-size/history/performance metrics into telemetry.
+- Fix Windows repetition across old anchors/midnight and Sunday-aligned weekly recurrence.
+- Add pgAgent bitmap/exception expansion, named hosts/time zones, deduplicated starts, observed facts, median/P95 concurrency, slack and coverage reports.
+- Add narrow comparison normalization, native dump preservation, snapshot comparison hashes, secret gate, filesystem verify/restore.
+- Expand user cron, timer definitions, Windows task XML/events and optional performance snapshots.
+- Fix date-dependent retention test; add regression and live-integration harnesses.
+- See docs/release-1.6.0.md and VALIDATION.md for limitations; this is not a claim that every earlier roadmap feature is implemented.
+
 # Changelog
 
 ## 1.5.0 (2026-10-08)

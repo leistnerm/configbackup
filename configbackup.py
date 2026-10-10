@@ -36,8 +36,10 @@ try:
 except ImportError:  # pragma: no cover
     yaml = None
 
+from completeness import Coverage, MANIFEST
+
 APP_NAME = "ConfigBackup"
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.6.0"
 STATE_VERSION = 1
 PHASES = ["pre_run", "pre_backup", "backup", "post_backup", "post_run"]
 TASK_TYPES = {"execute", "command", "file", "directory", "glob"}
@@ -1004,22 +1006,17 @@ class BackupEngine:
                     unresolved = ", ".join(t["name"] for t in pending)
                     raise ConfigError(f"Could not resolve task ordering in phase {phase}: {unresolved}")
 
-        preliminary_required_problems = [
-            r for r in self.results.values()
-            if r.required and r.status in {"failed", "skipped"}
-        ]
         if self._uses_git and not self.dry_run:
-            if preliminary_required_problems:
-                self.logger.warning("Git snapshot changes rolled back because a required task failed or was skipped")
+            # Failed storage tasks roll back their own writes in _run_task.
+            # Unrelated collector/cleanup failures must not veto healthy snapshots.
+            try:
+                self._finalize_git_repo()
+            except Exception as exc:
+                self.logger.exception("Git commit/push failed: %s", exc)
                 self._rollback_git_repo()
-            else:
-                try:
-                    self._finalize_git_repo()
-                except Exception as exc:
-                    self.logger.exception("Git commit/push failed: %s", exc)
-                    self.results["git-finalize"] = TaskResult(
-                        "git-finalize", "failed", str(exc), True, started=iso_now(), ended=iso_now()
-                    )
+                self.results["git-finalize"] = TaskResult(
+                    "git-finalize", "failed", str(exc), True, started=iso_now(), ended=iso_now()
+                )
 
         if self.dry_run:
             required_problems: list[TaskResult] = []
@@ -1028,13 +1025,14 @@ class BackupEngine:
         else:
             required_problems = [
                 r for r in self.results.values()
-                if r.required and r.status in {"failed", "skipped"}
+                if r.required and r.status in {"failed", "skipped", "partial"}
             ]
             if required_problems:
                 self.logger.warning("Retention skipped because one or more required tasks failed or were skipped")
             else:
                 eligible_retention = {name for name, r in self.results.items() if r.status == "success"}
                 self._run_retention_all(eligible_retention)
+        # Persist a fresh attempt record even when healthy sections were committed.
         self.state.save()
         self._write_run_manifest()
         self._print_summary()
@@ -1558,6 +1556,7 @@ class BackupEngine:
                 self.logger.info("DRY-RUN: Git ignore would skip %s", source_display or src)
             else:
                 if destination.exists() or destination.is_symlink():
+                    self._remember_file(destination)
                     destination.unlink(missing_ok=True)
                     self._remove_empty_git_parents(destination.parent)
                     self.logger.info("GIT IGNORE %s (removed current Git snapshot)", source_display or src)
@@ -1588,8 +1587,12 @@ class BackupEngine:
         file_state["active"] = True
         file_state["missing_runs"] = 0
         file_state["last_seen"] = iso_now()
-        src_hash = hash_file(src, self.hash_algorithm)
-        size = src.stat().st_size
+        canonical = None
+        if task.get("git_canonicalize") and src.suffix.lower() in {".sql", ".json", ".xml", ".dtsx"}:
+            from collectors.common.canonicalize import convert
+            canonical = convert(src).encode("utf-8")
+        src_hash = hashlib.new(self.hash_algorithm, canonical).hexdigest() if canonical is not None else hash_file(src, self.hash_algorithm)
+        size = len(canonical) if canonical is not None else src.stat().st_size
         rel_git = self._git_relative_path(logical)
         destination = self.git_repo / rel_git
         existed = destination.exists()
@@ -1605,7 +1608,18 @@ class BackupEngine:
         if self.dry_run:
             self.logger.info("DRY-RUN: would update Git snapshot %s -> %s", source_display or src, destination)
         else:
-            atomic_copy(src, destination)
+            self._remember_file(destination)
+            if canonical is None:
+                atomic_copy(src, destination)
+            else:
+                ensure_parent(destination)
+                fd, temp = tempfile.mkstemp(prefix=".canonical-", dir=destination.parent)
+                try:
+                    with os.fdopen(fd,"wb") as stream:
+                        stream.write(canonical)
+                    os.replace(temp,destination)
+                finally:
+                    Path(temp).unlink(missing_ok=True)
             if hash_file(destination, self.hash_algorithm) != src_hash:
                 destination.unlink(missing_ok=True)
                 raise RuntimeError(f"Git snapshot copy verification failed: {source_display or src}")
@@ -1684,6 +1698,25 @@ class BackupEngine:
             self.logger.info("GitHub PR created: %s", url)
         return url
 
+    def _scan_git_secrets(self) -> None:
+        from secret_scan import scan_bytes
+        config = self.git_cfg.get("secret_scan") or {}
+        # PR/push paths always enforce scanning; local-only repositories may opt out.
+        if config.get("enabled") is False and not (self.git_cfg.get("push") or self.git_mode == "pull_request"):
+            return
+        findings = []
+        names = self._git_command(["ls-files", "-z"]).stdout.split("\0")
+        for name in names:
+            if not name:
+                continue
+            file = self.git_repo / name
+            if file.is_symlink():
+                findings.append(name + ": symlink cannot be scanned safely")
+            elif file.is_file():
+                findings.extend(scan_bytes(file.read_bytes(), name, config.get("allow_sha256", [])))
+        if findings:
+            raise RuntimeError("Secret scan blocked commit/push: " + "; ".join(findings[:20]))
+
     def _finalize_git_repo(self) -> None:
         if self.git_repo is None:
             return
@@ -1702,6 +1735,7 @@ class BackupEngine:
                 return
             if staged.returncode != 1:
                 raise RuntimeError(staged.stderr.strip() or "Unable to inspect staged Git changes")
+            self._scan_git_secrets()
             message_template = str(self.git_cfg.get("commit_message") or "ConfigBackup {hostname} {run_id}")
             message = self._format_git_template(message_template)
             self._git_command(["commit", "-m", message])
@@ -1736,6 +1770,7 @@ class BackupEngine:
             self._git_command(["reset", "--hard", "HEAD"])
             self._git_command(["clean", "-fd"])
         else:
+            self._git_command(["read-tree", "--empty"])
             # Dedicated repo was clean before the run; remove generated working-tree files only.
             for child in self.git_repo.iterdir():
                 if child.name == ".git":
@@ -1744,6 +1779,17 @@ class BackupEngine:
                     shutil.rmtree(child)
                 else:
                     child.unlink(missing_ok=True)
+
+    def _remember_file(self, path: Path) -> None:
+        directory = getattr(self, "_journal_directory", None)
+        if directory is None or path in self._file_journal:
+            return
+        if path.exists():
+            saved = directory / str(len(self._file_journal))
+            shutil.copy2(path, saved)
+            self._file_journal[path] = saved
+        else:
+            self._file_journal[path] = None
 
     def _close_logging(self) -> None:
         for handler in list(self.logger.handlers):
@@ -1758,7 +1804,11 @@ class BackupEngine:
         name = task["name"]
         required = bool(task.get("required", True))
         deps = task.get("depends_on") or []
-        failed_deps = [d for d in deps if d not in self.results or self.results[d].status not in {"success", "dry-run"}]
+        accepted = {"success", "dry-run"}
+        # Partial dependency acceptance is restricted to manifest-protected directory tasks.
+        if task.get("collection_manifest") and task["type"] == "directory":
+            accepted.add("partial")
+        failed_deps = [d for d in deps if d not in self.results or self.results[d].status not in accepted]
         if failed_deps and not task.get("run_on_failure"):
             msg = f"Skipped because dependencies did not succeed: {', '.join(failed_deps)}"
             self.logger.warning("Task %s: %s", name, msg)
@@ -1779,6 +1829,13 @@ class BackupEngine:
         started_perf = time.monotonic()
         result = TaskResult(name=name, status="success", required=required, started=started_dt.isoformat(timespec="seconds"))
         self.logger.info("Task %s (%s/%s) started", name, task["phase"], task["type"])
+        state_before = copy.deepcopy(self.state.task(name))
+        stats_before = copy.deepcopy(self.stats)
+        written_before = self._written_paths.copy()
+        owners_before = self._logical_owners.copy()
+        journal = tempfile.TemporaryDirectory(prefix="configbackup-transaction-") if not self.dry_run else None
+        self._file_journal = {}
+        self._journal_directory = Path(journal.name) if journal else None
         try:
             if task["type"] == "execute":
                 self._task_execute(task, result)
@@ -1788,16 +1845,33 @@ class BackupEngine:
                 self._task_backup_sources(task, result)
             else:  # pragma: no cover
                 raise ConfigError(f"Unsupported task type {task['type']}")
-            if result.status == "failed":
+            if result.status in {"failed", "partial"}:
                 pass
             elif self.dry_run:
                 result.status = "dry-run"
             else:
                 result.status = "success"
         except Exception as exc:
+            # Undo only this task. Each old file is copied before its first mutation.
+            # Reverse order restores moved deletion generations as well as snapshots.
+            for original, saved in reversed(list(self._file_journal.items())):
+                if saved is None:
+                    original.unlink(missing_ok=True)
+                else:
+                    atomic_copy(saved, original)
+            self.state.data["tasks"][name] = state_before
+            self.stats = stats_before
+            self._written_paths = written_before
+            self._logical_owners = owners_before
+            result.counts.clear()
             result.status = "failed"
             result.message = str(exc)
-            self.logger.exception("Task %s failed: %s", name, exc)
+            self.logger.exception("Task %s failed; its file changes rolled back: %s", name, exc)
+        finally:
+            self._file_journal = {}
+            self._journal_directory = None
+            if journal:
+                journal.cleanup()
         result.ended = now_local().isoformat(timespec="seconds")
         result.duration_seconds = time.monotonic() - started_perf
         self.logger.info("Task %s finished: %s (%.2fs)%s", name, result.status, result.duration_seconds, f" - {result.message}" if result.message else "")
@@ -1822,7 +1896,13 @@ class BackupEngine:
             text = completed.stdout.decode(errors="replace").rstrip()
             if text:
                 self.logger.info("Task %s stdout:\n%s", task["name"], text)
-        if completed.returncode != 0:
+        if completed.returncode == 6 and (output_dir / MANIFEST).is_file():
+            coverage = Coverage(output_dir, self.run_id)
+            if not coverage.partial:
+                raise RuntimeError("Partial exit requires an incomplete section")
+            result.status = "partial"
+            result.message = "Collector sections failed; successful scopes remain eligible"
+        elif completed.returncode != 0:
             raise RuntimeError(f"Command returned exit code {completed.returncode}")
 
     def _task_command(self, task: dict[str, Any], result: TaskResult) -> None:
@@ -1924,7 +2004,38 @@ class BackupEngine:
 
     def _task_backup_sources(self, task: dict[str, Any], result: TaskResult) -> None:
         self._validate_scan_roots(task)
+        coverage = None
+        roots = self._as_list(task.get("source"))
+        if task.get("collection_manifest") or (len(roots) == 1 and (Path(roots[0]) / MANIFEST).is_file()):
+            if task["type"] != "directory" or len(roots) != 1:
+                raise ConfigError("Collection manifests require one directory source")
+            source_root = Path(roots[0])
+            expected = self.run_id if task.get("depends_on") else None
+            coverage = Coverage(source_root, expected)
+            if coverage.partial:
+                result.status = "partial"
+                result.message = "Incomplete collector scopes preserved"
         discovered = self._discover_sources(task)
+        if coverage:
+            discovered = [(src, logical) for src, logical in discovered
+                          if src.relative_to(source_root).as_posix() in coverage.files]
+            destination = Path(task["destination"]) if task.get("destination") else None
+            logical_root = self._logical_for_source(source_root / "_probe", source_root, destination).parent
+            task["_complete_scopes"] = [posix_rel(logical_root / scope) for scope in coverage.complete]
+        # Reject aliases even on case-sensitive hosts: snapshots must remain safe
+        # when moved to Windows or a default macOS filesystem.
+        portable_names = {}
+        for existing_task in self.state.data.get('tasks', {}).values():
+            for key in existing_task.get('files', {}):
+                folded = key.casefold()
+                if folded in portable_names and portable_names[folded] != key:
+                    raise RuntimeError('Existing archive has case-colliding logical paths')
+                portable_names[folded] = key
+        for _, logical in discovered:
+            key = posix_rel(logical)
+            if key.casefold() in portable_names and portable_names[key.casefold()] != key:
+                raise RuntimeError('Case-colliding archive path: ' + key)
+            portable_names[key.casefold()] = key
         seen_keys: set[str] = set()
         for src, logical in discovered:
             self.stats.files_scanned += 1
@@ -1933,7 +2044,9 @@ class BackupEngine:
             seen_keys.add(posix_rel(logical))
         self._process_missing(task, seen_keys)
         task_state = self.state.task(task["name"])
-        task_state["last_success"] = iso_now()
+        task_state["last_collection"] = iso_now()
+        if result.status == "success":
+            task_state["last_success"] = iso_now()
 
     def _validate_scan_roots(self, task: dict[str, Any]) -> None:
         for source_value in self._as_list(task.get("source")):
@@ -2163,6 +2276,7 @@ class BackupEngine:
         if self.dry_run:
             self.logger.info("DRY-RUN: would store %s -> %s", source_display or src, destination)
         else:
+            self._remember_file(destination)
             atomic_copy(src, destination)
             stored_hash = hash_file(destination, self.hash_algorithm)
             if stored_hash != src_hash:
@@ -2199,7 +2313,11 @@ class BackupEngine:
             k for k, s in task_state["files"].items()
             if s.get("active", True) and (s.get("versions") or s.get("git_hash"))
         ]
+        if '_complete_scopes' in task:
+            active_keys = [k for k in active_keys if any(k == p or k.startswith(p + '/') for p in task['_complete_scopes'])]
         missing_keys = [k for k in active_keys if k not in seen_keys]
+        if "_complete_scopes" in task:
+            missing_keys = [k for k in missing_keys if any(k == p or k.startswith(p + "/") for p in task["_complete_scopes"])]
         if not missing_keys:
             return
         self.stats.missing += len(missing_keys)
@@ -2258,6 +2376,8 @@ class BackupEngine:
                     if src.exists():
                         if dst.exists():
                             dst = dst.with_name(f"{dst.stem}-{self.run_id}{dst.suffix}")
+                        self._remember_file(src)
+                        self._remember_file(dst)
                         shutil.move(str(src), str(dst))
                         self._remove_empty_parents(src.parent)
                 new_version = copy.deepcopy(version)
@@ -2271,6 +2391,7 @@ class BackupEngine:
                 "versions": len(moved_versions),
             }
             if not self.dry_run:
+                self._remember_file(metadata_path)
                 atomic_json_write(metadata_path, metadata)
             generation = {
                 "deleted_at": deletion_time.isoformat(timespec="seconds"),
@@ -2288,6 +2409,7 @@ class BackupEngine:
                 if self.dry_run:
                     self.logger.info("DRY-RUN: would remove deleted Git snapshot %s", destination)
                 elif destination.exists():
+                    self._remember_file(destination)
                     destination.unlink()
                     self._remove_empty_git_parents(destination.parent)
             file_state["git_hash"] = None
@@ -2645,6 +2767,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true", help="Show actions without writing files or executing commands")
     parser.add_argument("--validate", action="store_true", help="Validate configuration and exit")
     parser.add_argument("--show-config", action="store_true", help="Print resolved configuration and exit")
+    parser.add_argument("--verify", action="store_true", help="Verify every retained filesystem version")
+    parser.add_argument("--restore", metavar="DIRECTORY", help="Restore verified files to a new directory")
+    parser.add_argument("--as-of", help="Restore newest versions at/before ISO timestamp")
     parser.add_argument("--prune", action="store_true", help="Run retention processing only")
     parser.add_argument("--version", action="version", version=f"%(prog)s {APP_VERSION}")
     return parser
@@ -2663,6 +2788,13 @@ def main(argv: list[str] | None = None) -> int:
             print(yaml.safe_dump(redact_for_display(cfg), sort_keys=False))
             return 0
         engine = BackupEngine(cfg, dry_run=args.dry_run, prune_only=args.prune)
+        if args.verify or args.restore:
+            from recovery import recover
+            with single_instance_lock(engine.internal_root / "configbackup.lock"):
+                try:
+                    return recover(engine, args.restore, args.as_of)
+                finally:
+                    engine._close_logging()
         engine._start_perf = time.monotonic()
         lock_path = engine.internal_root / "configbackup.lock"
         if args.dry_run:

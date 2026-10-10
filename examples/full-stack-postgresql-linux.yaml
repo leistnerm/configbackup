@@ -51,6 +51,7 @@ tasks:
 
   - name: system-history
     type: directory
+    collection_manifest: true
     source: ${SYSTEM_STAGING}
     destination: system
     depends_on: [collect-system]
@@ -73,6 +74,8 @@ tasks:
 
   - name: postgresql-history
     type: directory
+    collection_manifest: true
+    git_canonicalize: true
     source: ${PG_STAGING}
     destination: postgresql
     depends_on: [collect-postgresql]

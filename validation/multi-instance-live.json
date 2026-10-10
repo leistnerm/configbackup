@@ -1,0 +1,13 @@
+{
+  "status": "passed",
+  "database": "cbtest_a6eb9db9a9",
+  "checks": [
+    "same DB/job names on two live SQL instances",
+    "separate archive and Git paths",
+    "offline database unchanged",
+    "healthy second instance commits",
+    "unreachable first instance preserves all its state",
+    "second instance still commits after first cannot connect"
+  ],
+  "limitation": "Explicit TCP ports tested; Windows SQL Browser named-instance discovery not tested"
+}

@@ -1,3 +1,5 @@
+> **1.6.0:** [Migration, changed behavior, new options, and limitations](release-1.6.0.md) supersede older descriptions below, especially collector failure handling, telemetry paths, and time zones.
+
 # Git / GitHub snapshot storage
 
 ConfigBackup can use Git as the history engine for selected tasks. Git is especially useful for text-oriented configuration, SQL schema, expanded SSIS package XML (`.dtsx`), PostgreSQL schema, system inventory, and other artifacts where line-level diffs are useful.

@@ -1,4 +1,6 @@
-# Windows/Linux guest-system collector
+> **1.6.0:** [Migration, changed behavior, new options, and limitations](release-1.6.0.md) supersede older descriptions below, especially collector failure handling, telemetry paths, and time zones.
+
+# Windows/Linux/macOS guest-system collector
 
 `collectors/system/collect_system.py` creates a current-state inventory of a Windows or Linux guest. It is designed for VMs and physical systems where you want to preserve enough machine configuration to understand or rebuild the guest later.
 

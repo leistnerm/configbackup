@@ -1,0 +1,22 @@
+-- DISPOSABLE DATABASE ONLY. Requires existing role {{READER_ROLE}}.
+CREATE SCHEMA "Mixed Case";
+CREATE TYPE "Mixed Case".status AS ENUM ('new','active','archived');
+CREATE DOMAIN "Mixed Case".positive_int AS integer CHECK(VALUE>0);
+CREATE TABLE "Mixed Case".accounts(id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,tenant text NOT NULL,state "Mixed Case".status DEFAULT 'new',qty "Mixed Case".positive_int,settings jsonb);
+ALTER TABLE "Mixed Case".accounts ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_filter ON "Mixed Case".accounts USING (tenant=current_user) WITH CHECK(tenant=current_user);
+CREATE INDEX active_accounts ON "Mixed Case".accounts(tenant) INCLUDE(qty) WHERE state='active';
+CREATE TABLE public.partitioned_events(id int, stamp date) PARTITION BY RANGE(stamp);
+CREATE TABLE public.events_2026 PARTITION OF public.partitioned_events FOR VALUES FROM ('2026-01-01') TO ('2027-01-01');
+CREATE FUNCTION "Mixed Case".bump(x int) RETURNS int LANGUAGE sql IMMUTABLE AS $$SELECT x+1$$;
+CREATE FUNCTION "Mixed Case".bump(x bigint) RETURNS bigint LANGUAGE sql IMMUTABLE AS $$SELECT x+1$$;
+CREATE FUNCTION "Mixed Case".before_account() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN NEW.tenant=coalesce(NEW.tenant,current_user); RETURN NEW; END$$;
+CREATE TRIGGER before_account BEFORE INSERT ON "Mixed Case".accounts FOR EACH ROW EXECUTE FUNCTION "Mixed Case".before_account();
+CREATE MATERIALIZED VIEW "Mixed Case".counts AS SELECT tenant,count(*) FROM "Mixed Case".accounts GROUP BY tenant WITH NO DATA;
+GRANT USAGE ON SCHEMA "Mixed Case" TO {{READER_ROLE}};
+GRANT SELECT(id,tenant) ON "Mixed Case".accounts TO {{READER_ROLE}};
+ALTER DEFAULT PRIVILEGES IN SCHEMA "Mixed Case" GRANT SELECT ON TABLES TO {{READER_ROLE}};
+CREATE EXTENSION postgres_fdw;
+CREATE SERVER loopback FOREIGN DATA WRAPPER postgres_fdw OPTIONS(host '127.0.0.1',dbname '{{DATABASE}}');
+CREATE USER MAPPING FOR CURRENT_USER SERVER loopback OPTIONS(user 'postgres');
+COMMENT ON TABLE "Mixed Case".accounts IS 'RLS and quoted identifier fixture';

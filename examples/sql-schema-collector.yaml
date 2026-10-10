@@ -81,6 +81,8 @@ tasks:
 
   - name: archive-sql-server
     type: directory
+    collection_manifest: true
+    git_canonicalize: true
     source: ${SQL_STAGING}
     destination: 'sql/${SQL_DESTINATION}'
     depends_on: [collect-sql-server]
