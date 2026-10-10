@@ -41,3 +41,29 @@ python collectors/common/snapshot_manifest.py /snapshot/one /results/hashes.json
 ```
 
 Separate telemetry/manifest changes and native PostgreSQL safety-key changes from configuration changes. Deliberately alter a partition boundary and RLS policy in the disposable database, collect again, verify meaningful catalog/schema differences, then revert the fixture. Restore native PG schema dumps only into a separate disposable cluster: dumps contain `CREATE DATABASE` and reconnect commands. File recovery with `configbackup.py --restore` is distinct from restoring a live database.
+
+
+## Read-access profile and 2.0 host tests
+
+The read-access test creates a new uniquely named login/role and database, applies the generated grant scripts, verifies ordinary writes are rejected, collects a real schema and removes its test objects. SQL Server can return partial status because protected native service exports remain unavailable. PostgreSQL grants include broad cluster-wide reads and BYPASSRLS; use only a disposable cluster. PostgreSQL admin authentication uses normal libpq settings; the temporary role receives a generated password in the child environment. Its connection must be allowed by your test pg_hba.conf.
+
+```sh
+python tests/integration/read_only_access_live.py --engine postgresql \
+  --bin-dir /path/to/postgresql/bin --host 127.0.0.1 --port 55439 --user postgres \
+  --output /fresh/pg-access --confirm-disposable-server
+
+# Set CONFIGBACKUP_TEST_SQL_PASSWORD through a secret provider first.
+python tests/integration/read_only_access_live.py --engine sqlserver \
+  --server 127.0.0.1,51439 --pwsh /path/to/pwsh \
+  --module-path /path/to/modules --sqlpackage /path/to/sqlpackage \
+  --output /fresh/sql-access --confirm-disposable-server
+```
+
+These probes are not a proof against every extension, inherited permission or privileged routine. See [read-only access](../../docs/read-only-access.md). The earlier richer fixture tests also caught unsafe inherited permissions and failed only the affected databases.
+
+The [host coverage guide](../../docs/host-coverage.md) gives commands for the image-only AppleRAID fault lab, disposable Linux LVM/mdraid/XFS/ext4 lab, and isolated nftables counter test. Do not run Linux disk/firewall labs on a production host or shared network namespace.
+
+For optional database health, populate the templates below in NEW disposable databases, then run SQL `-IncludeHealthMetrics -IncludeIndexHealth` or PostgreSQL `--include-health --bloat-table public.health_fixture`. Compare repeated configuration separately from changing `telemetry/`; verify SQL index page/density values and PG `bloat:public.health_fixture` results. Drop only the disposable databases afterwards.
+
+- [SQL health fixture](fixtures/sqlserver-health.sql.template)
+- [PostgreSQL health fixture](fixtures/postgresql-health.sql.template)

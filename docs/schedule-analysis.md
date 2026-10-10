@@ -1,4 +1,4 @@
-> **1.6.0:** [Migration, changed behavior, new options, and limitations](release-1.6.0.md) supersede older descriptions below, especially collector failure handling, telemetry paths, and time zones.
+> **2.0.0:** Read [current release notes](release-2.0.0.md) and the [1.6 safety migration](release-1.6.0.md). New profiles, telemetry paths and section-level preservation supersede older descriptions below.
 
 # Schedule inventory, timelines, and overlap analysis
 
@@ -164,3 +164,13 @@ Unlike normal exclusions, `analysis.watchdogs` and `analysis.exclude_from_load` 
 This first release covers core recurring schedules. It deliberately does not claim to predict calendar exceptions, SQL Agent idle/startup events, advanced Windows event triggers, systemd monotonic timers, pgAgent's bitmap calendar, arbitrary systemd calendar expressions, SQL Agent schedules with complex server-specific timezone effects, or runtime contention. Those items appear in `warnings.csv` where identified.
 
 **Overlaps are potential scheduling conflicts, not proof of simultaneous CPU/disk load.** A database scheduler, OS task, or external orchestrator may skip duplicate launches, queue jobs, have singleton/mutex enforcement, use randomized delays, or run with widely varying data-dependent durations. The report provides median/P95, sample size and override provenance so you can prioritize investigating plausible hotspots instead of relying on a false certainty.
+
+## 2.0 operations analysis
+
+See `examples/schedule-operations.yaml`. `analysis.enabled` controls observed execution matching, missed/late/long-running/failed starts, successful runtime medians/P95/trends, weighted shared resources, dependency windows, deadlines, hypothetical shifts and watchdog evidence.
+
+Observations match an explicit expected start when supplied, otherwise the nearest projected start within tolerance. A missing history row becomes a missed-run finding only when the input explicitly declares complete history coverage. Built-in best-effort event/history collectors do not automatically prove that completeness. Duplicate/truncated/inaccessible history, unsupported triggers and DST ambiguity require review.
+
+Concurrency is grouped by physical host across instances; explicit resource assignments can represent shared storage/CPU pools. Weights and capacities are user assumptions, not measured per-job CPU/I/O attribution. Scenario shifts change a report only. Running/failed observations remain useful even when successful duration samples are unavailable; P95 estimates are based on available history, not guaranteed deadlines.
+
+A watchdog's frequent launch is not proof of useful work. Configure independent useful-work heartbeat evidence; a missing heartbeat is unknown unless its expected deadline can be evaluated. Per-report exclusions apply to new report types as well. Disabled reports are recorded in `report-status.json`, so the dashboard/monitor do not consume a stale disabled CSV left from an earlier run.

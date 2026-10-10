@@ -39,7 +39,7 @@ except ImportError:  # pragma: no cover
 from completeness import Coverage, MANIFEST
 
 APP_NAME = "ConfigBackup"
-APP_VERSION = "1.6.0"
+APP_VERSION = "2.0.0"
 STATE_VERSION = 1
 PHASES = ["pre_run", "pre_backup", "backup", "post_backup", "post_run"]
 TASK_TYPES = {"execute", "command", "file", "directory", "glob"}
@@ -393,7 +393,7 @@ class ConfigLoader:
     def _resolve(self, cfg: dict[str, Any]) -> dict[str, Any]:
         cfg = copy.deepcopy(cfg)
 
-        for section in ["backup", "internal", "options", "logging", "deletion", "variables", "retention_policies", "defaults", "git"]:
+        for section in ["backup", "internal", "options", "logging", "deletion", "variables", "retention_policies", "defaults", "git", "monitoring"]:
             if section in cfg and cfg[section] is not None and not isinstance(cfg[section], dict):
                 raise ConfigError(f"{section} must be a mapping")
 
@@ -511,6 +511,8 @@ class ConfigLoader:
             resolved_tasks.append(resolved)
         cfg["tasks"] = resolved_tasks
         self._validate(cfg)
+        from monitoring import validate_config
+        validate_config(cfg.get("monitoring") or {})
         return cfg
 
     def _resolve_task(self, task: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
@@ -874,8 +876,13 @@ class BackupEngine:
         self.hash_algorithm = cfg["options"]["hash_algorithm"]
         self._written_paths: set[Path] = set()
         self._logical_owners: dict[str, tuple[str, str]] = {}
-        self._uses_git = any(
-            t.get("type") != "execute" and str(t.get("storage", "filesystem")).lower() in {"git", "both"}
+        self._retention_scopes = {}
+        self.changes = []
+        task_definitions={t['name']:t for t in cfg.get('tasks',[])}
+        def task_enabled(task):
+            return task.get('enabled',True) and all(task_enabled(task_definitions[name]) for name in task.get('depends_on',[]))
+        self._uses_git = (cfg.get("git") or {}).get("enabled",True) and any(
+            task_enabled(t) and t.get("type") != "execute" and str(t.get("storage", "filesystem")).lower() in {"git", "both"}
             for t in cfg.get("tasks", [])
         )
         self.git_cfg = cfg.get("git") or {}
@@ -1027,14 +1034,33 @@ class BackupEngine:
                 r for r in self.results.values()
                 if r.required and r.status in {"failed", "skipped", "partial"}
             ]
-            if required_problems:
-                self.logger.warning("Retention skipped because one or more required tasks failed or were skipped")
-            else:
-                eligible_retention = {name for name, r in self.results.items() if r.status == "success"}
+            eligible_retention = {name for name, r in self.results.items() if r.status in {'success', 'partial'}}
+            try:
                 self._run_retention_all(eligible_retention)
+            except Exception as exc:
+                self.results['retention'] = TaskResult('retention', 'failed', str(exc), True)
+                required_problems.append(self.results['retention'])
         # Persist a fresh attempt record even when healthy sections were committed.
         self.state.save()
         self._write_run_manifest()
+        if not self.dry_run:
+            from changes import write_report
+            change_rows = write_report(self.internal_root / 'reports' / self.run_id, self.changes)
+            if (self.cfg.get('monitoring') or {}).get('enabled', False):
+                try:
+                    from monitoring import run_monitor
+                    monitor_cfg = expand_value(self.cfg['monitoring'], self.variables_for_task({'name':'monitoring'}), strict=True)
+                    monitor_cfg.setdefault('host',self.hostname)
+                    summary = run_monitor(monitor_cfg, self.internal_root / 'monitoring', self.state.data,
+                              json.loads((self.internal_root/'runs'/f'{self.run_id}.json').read_text()), change_rows)
+                    if summary['delivery_errors']:
+                        raise RuntimeError('Notification delivery failed; queued for retry')
+                except Exception as exc:
+                    required = bool(self.cfg['monitoring'].get('required',False))
+                    self.results['monitoring'] = TaskResult('monitoring','failed',str(exc),required)
+                    if required: required_problems.append(self.results['monitoring'])
+                    self.logger.error('Monitoring: %s',exc)
+                self._write_run_manifest()
         self._print_summary()
         exit_code = 4 if required_problems else 0
         self._close_logging()
@@ -1364,6 +1390,15 @@ class BackupEngine:
             start_ref = f"{remote}/{self.git_base_branch}"
             # A leftover remote automation branch may belong to a merged/closed PR. Reset it to current base.
             self.git_force_push = remote_branch_exists
+
+        publication=self.state.data.get('publication',{})
+        pending=(publication.get('local_commit') != publication.get('pushed_commit') or
+                 (publication.get('pr_required') and not publication.get('pr_url')))
+        if local_branch_exists and pending and publication.get('branch')==self.git_branch and publication.get('repository')==str(self.git_control_repo):
+            local_head=self._git_control_command(['rev-parse',local_branch_ref]).stdout.strip()
+            if local_head==publication.get('local_commit'):
+                start_ref=local_branch_ref
+                self.git_force_push=bool(publication.get('force_push'))
 
         if local_branch_exists:
             reset = self._git_control_command(["branch", "-f", self.git_branch, start_ref], check=False)
@@ -1705,15 +1740,17 @@ class BackupEngine:
         if config.get("enabled") is False and not (self.git_cfg.get("push") or self.git_mode == "pull_request"):
             return
         findings = []
-        names = self._git_command(["ls-files", "-z"]).stdout.split("\0")
-        for name in names:
-            if not name:
+        # Inspect index modes and bytes, even when a worktree file disappeared.
+        entries = self._git_command(["ls-files", "--stage", "-z"]).stdout.split("\0")
+        for entry in entries:
+            if not entry: continue
+            metadata, name = entry.split("\t", 1)
+            mode, oid, stage = metadata.split()
+            if mode not in ("100644", "100755") or stage != "0":
+                findings.append(name + ": non-regular or unresolved index entry")
                 continue
-            file = self.git_repo / name
-            if file.is_symlink():
-                findings.append(name + ": symlink cannot be scanned safely")
-            elif file.is_file():
-                findings.extend(scan_bytes(file.read_bytes(), name, config.get("allow_sha256", [])))
+            blob = subprocess.run(["git", "cat-file", "blob", oid], cwd=self.git_repo, capture_output=True, check=True).stdout
+            findings.extend(scan_bytes(blob, name, config.get("allow_sha256", [])))
         if findings:
             raise RuntimeError("Secret scan blocked commit/push: " + "; ".join(findings[:20]))
 
@@ -1730,17 +1767,19 @@ class BackupEngine:
             managed_arg = managed_rel.as_posix() if managed_rel.parts else "."
             self._git_command(["add", "-A", "--", managed_arg])
             staged = self._git_command(["diff", "--cached", "--quiet"], check=False)
-            if staged.returncode == 0:
-                self.logger.info("Git snapshot: no changes to commit")
-                return
-            if staged.returncode != 1:
+            if staged.returncode not in (0, 1):
                 raise RuntimeError(staged.stderr.strip() or "Unable to inspect staged Git changes")
             self._scan_git_secrets()
-            message_template = str(self.git_cfg.get("commit_message") or "ConfigBackup {hostname} {run_id}")
-            message = self._format_git_template(message_template)
-            self._git_command(["commit", "-m", message])
-            commit = self._git_command(["rev-parse", "--short", "HEAD"]).stdout.strip()
-            self.logger.info("Git snapshot committed as %s", commit)
+            if staged.returncode == 1:
+                message_template = str(self.git_cfg.get("commit_message") or "ConfigBackup {hostname} {run_id}")
+                self._git_command(["commit", "-m", self._format_git_template(message_template)])
+                self.logger.info("Git snapshot committed")
+            else:
+                self.logger.info("Git snapshot unchanged; checking pending publication")
+            if self._git_command(["rev-parse", "--verify", "HEAD"], check=False).returncode != 0:
+                return
+            self.state.data.setdefault('publication', {})['local_commit'] = self._git_command(['rev-parse', 'HEAD']).stdout.strip()
+            self.state.data['publication'].update(push_required=bool(self.git_cfg.get('push')),branch=self.git_branch if self.git_mode=='pull_request' else str(self.git_cfg.get('branch') or 'main'), repository=str(self.git_control_repo),pr_required=self.git_mode=='pull_request',pr_url=self.git_open_pr_url,force_push=self.git_force_push)
             if self.git_cfg.get("push"):
                 remote = str(self.git_cfg.get("remote_name") or "origin")
                 branch = self.git_branch if self.git_mode == "pull_request" else str(self.git_cfg.get("branch") or "main")
@@ -1749,9 +1788,11 @@ class BackupEngine:
                     push_args.append("--force-with-lease")
                 push_args.extend([remote, f"HEAD:refs/heads/{branch}"])
                 self._git_command(push_args)
+                self.state.data["publication"].update(pushed_commit=self.state.data["publication"]["local_commit"], last_push=iso_now())
                 self.logger.info("Git snapshot pushed to %s/%s", remote, branch)
                 if self.git_mode == "pull_request":
                     self.git_open_pr_url = self._ensure_github_pull_request()
+                    self.state.data["publication"]["pr_url"] = self.git_open_pr_url
         finally:
             if self.git_mode == "pull_request":
                 self._cleanup_git_worktree()
@@ -1800,15 +1841,22 @@ class BackupEngine:
                 self.logger.removeHandler(handler)
 
     def _run_task(self, raw_task: dict[str, Any]) -> TaskResult:
+        if raw_task.get("enabled",True) is False:
+            return TaskResult(raw_task["name"],"disabled","Disabled by configuration",False)
         task = self.resolve_task_runtime(raw_task)
         name = task["name"]
         required = bool(task.get("required", True))
+        if self.git_cfg.get("enabled",True) is False:
+            if task.get("storage")=="git":return TaskResult(name,"disabled","Git backend disabled",False)
+            if task.get("storage")=="both":task["storage"]="filesystem"
         deps = task.get("depends_on") or []
         accepted = {"success", "dry-run"}
         # Partial dependency acceptance is restricted to manifest-protected directory tasks.
         if task.get("collection_manifest") and task["type"] == "directory":
             accepted.add("partial")
         failed_deps = [d for d in deps if d not in self.results or self.results[d].status not in accepted]
+        if any(self.results.get(d) and self.results[d].status=="disabled" for d in failed_deps):
+            return TaskResult(name,"disabled","Dependency disabled",False)
         if failed_deps and not task.get("run_on_failure"):
             msg = f"Skipped because dependencies did not succeed: {', '.join(failed_deps)}"
             self.logger.warning("Task %s: %s", name, msg)
@@ -1829,6 +1877,7 @@ class BackupEngine:
         started_perf = time.monotonic()
         result = TaskResult(name=name, status="success", required=required, started=started_dt.isoformat(timespec="seconds"))
         self.logger.info("Task %s (%s/%s) started", name, task["phase"], task["type"])
+        self._task_has_committed_scopes = False
         state_before = copy.deepcopy(self.state.task(name))
         stats_before = copy.deepcopy(self.stats)
         written_before = self._written_paths.copy()
@@ -1859,12 +1908,13 @@ class BackupEngine:
                     original.unlink(missing_ok=True)
                 else:
                     atomic_copy(saved, original)
-            self.state.data["tasks"][name] = state_before
-            self.stats = stats_before
-            self._written_paths = written_before
-            self._logical_owners = owners_before
-            result.counts.clear()
-            result.status = "failed"
+            if not self._task_has_committed_scopes:
+                self.state.data["tasks"][name] = state_before
+                self.stats = stats_before
+                self._written_paths = written_before
+                self._logical_owners = owners_before
+                result.counts.clear()
+            result.status = "partial" if self._task_has_committed_scopes else "failed"
             result.message = str(exc)
             self.logger.exception("Task %s failed; its file changes rolled back: %s", name, exc)
         finally:
@@ -1942,6 +1992,7 @@ class BackupEngine:
         env = os.environ.copy()
         env.update({str(k): str(v) for k, v in (task.get("environment") or {}).items()})
         env.update(self.variables_for_task(task))
+        env["CONFIGBACKUP_SECTIONS"] = json.dumps(task.get("sections") or {})
         cwd = task.get("working_directory") or None
         stderr_mode = task.get("stderr", "log")
         stderr_target: Any
@@ -2004,24 +2055,76 @@ class BackupEngine:
 
     def _task_backup_sources(self, task: dict[str, Any], result: TaskResult) -> None:
         self._validate_scan_roots(task)
-        coverage = None
         roots = self._as_list(task.get("source"))
         if task.get("collection_manifest") or (len(roots) == 1 and (Path(roots[0]) / MANIFEST).is_file()):
-            if task["type"] != "directory" or len(roots) != 1:
-                raise ConfigError("Collection manifests require one directory source")
-            source_root = Path(roots[0])
-            expected = self.run_id if task.get("depends_on") else None
-            coverage = Coverage(source_root, expected)
-            if coverage.partial:
-                result.status = "partial"
-                result.message = "Incomplete collector scopes preserved"
-        discovered = self._discover_sources(task)
-        if coverage:
-            discovered = [(src, logical) for src, logical in discovered
-                          if src.relative_to(source_root).as_posix() in coverage.files]
-            destination = Path(task["destination"]) if task.get("destination") else None
-            logical_root = self._logical_for_source(source_root / "_probe", source_root, destination).parent
-            task["_complete_scopes"] = [posix_rel(logical_root / scope) for scope in coverage.complete]
+            if task['type'] != 'directory' or len(roots) != 1:
+                raise ConfigError('Collection manifests require one directory source')
+            source = Path(roots[0])
+            coverage = Coverage(source, self.run_id if task.get('depends_on') else None, task.get('sections'))
+            with tempfile.TemporaryDirectory(prefix='configbackup-sealed-') as folder:
+                sealed = coverage.seal(folder)
+                self._backup_scopes(task, result, source, sealed, coverage)
+        else:
+            discovered = self._discover_sources(task)
+            self._store_discovered(task, result, discovered)
+        state = self.state.task(task['name'])
+        state['last_collection'] = iso_now()
+        if result.status == 'success':
+            state['last_success'] = iso_now()
+
+    def _backup_scopes(self, task, result, source, sealed, coverage):
+        destination = Path(task['destination']) if task.get('destination') else None
+        logical_root = self._logical_for_source(source / '_probe', source, destination).parent
+        self._retention_scopes[task['name']] = []
+        existing_scopes=self.state.task(task['name']).setdefault('scopes',{})
+        current_paths={entry['path'] for entry in coverage.sections}
+        for old, value in existing_scopes.items():
+            if old not in current_paths and any(old.startswith(p+'/') or p.startswith(old+'/') for p in current_paths):
+                value['status']='superseded'
+        for entry in coverage.sections:
+            path = entry['path']
+            logical_scope = posix_rel(logical_root / path)
+            status = entry['status']
+            error = entry.get('error', '')
+            if status == 'complete':
+                discovered = [(sealed / name, self._logical_for_source(source / name, source, destination))
+                              for name in sorted(entry['files'])
+                              if self._filter_rel(Path(name), self._as_list(task.get('include')), self._as_list(task.get('exclude')))]
+                before = copy.deepcopy(self.state.task(task['name']))
+                stats = copy.deepcopy(self.stats)
+                counts = result.counts.copy()
+                written, owners = self._written_paths.copy(), self._logical_owners.copy()
+                changes_before = len(self.changes)
+                parent_journal, parent_dir = self._file_journal, self._journal_directory
+                with tempfile.TemporaryDirectory(prefix='configbackup-scope-') as journal:
+                    self._file_journal, self._journal_directory = {}, Path(journal)
+                    try:
+                        self._store_discovered({**task, '_complete_scopes': [logical_scope], '_source_identities': {str(sealed / name):str(source / name) for name in entry['files']}}, result, discovered)
+                        self._retention_scopes[task['name']].append(logical_scope)
+                        self._task_has_committed_scopes = True
+                    except Exception as exc:
+                        for original, saved in reversed(list(self._file_journal.items())):
+                            if saved is None:
+                                original.unlink(missing_ok=True)
+                            else:
+                                atomic_copy(saved, original)
+                        self.state.data['tasks'][task['name']] = before
+                        self.stats, result.counts = stats, counts
+                        self._written_paths, self._logical_owners = written, owners
+                        del self.changes[changes_before:]
+                        status, error = 'failed', str(exc)
+                    finally:
+                        self._file_journal, self._journal_directory = parent_journal, parent_dir
+            state = self.state.task(task['name']).setdefault('scopes', {}).setdefault(path, {})
+            state.update(status=status, error=error, last_attempt=iso_now(), logical_scope=logical_scope)
+            if status == 'complete':
+                state.update(last_success=iso_now(), source_collected_at=coverage.collected_at, consecutive_failures=0)
+            elif status in ('failed', 'skipped'):
+                state['consecutive_failures'] = state.get('consecutive_failures', 0) + 1
+                result.status, result.message = 'partial', 'Incomplete collector scopes preserved'
+                self.logger.warning('Preserved scope %s: %s', path, error)
+
+    def _store_discovered(self, task, result, discovered):
         # Reject aliases even on case-sensitive hosts: snapshots must remain safe
         # when moved to Windows or a default macOS filesystem.
         portable_names = {}
@@ -2036,17 +2139,15 @@ class BackupEngine:
             if key.casefold() in portable_names and portable_names[key.casefold()] != key:
                 raise RuntimeError('Case-colliding archive path: ' + key)
             portable_names[key.casefold()] = key
-        seen_keys: set[str] = set()
+        seen_keys = set()
         for src, logical in discovered:
             self.stats.files_scanned += 1
-            status = self._store_one_file(task, src, logical)
+            status = self._store_one_file(task, src, logical, source_display=task.get("_source_identities",{}).get(str(src)))
             result.counts[status] += 1
             seen_keys.add(posix_rel(logical))
+            if status in ('new', 'changed'):
+                self.changes.append({'task': task['name'], 'path': posix_rel(logical), 'change': status})
         self._process_missing(task, seen_keys)
-        task_state = self.state.task(task["name"])
-        task_state["last_collection"] = iso_now()
-        if result.status == "success":
-            task_state["last_success"] = iso_now()
 
     def _validate_scan_roots(self, task: dict[str, Any]) -> None:
         for source_value in self._as_list(task.get("source")):
@@ -2420,6 +2521,7 @@ class BackupEngine:
         file_state["missing_runs"] = 0
         file_state["deleted_at"] = deletion_time.isoformat(timespec="seconds")
         self.stats.deleted += 1
+        self.changes.append({"task":task["name"],"path":key,"change":"deleted"})
         if deleted_base is not None:
             self.logger.warning("DELETED %s -> %s", key, deleted_base)
         else:
@@ -2445,18 +2547,23 @@ class BackupEngine:
             if eligible_names is not None and name not in eligible_names:
                 continue
             task = tasks_by_name.get(name)
-            if not task:
+            if not task or task.get("enabled",True) is False:
                 continue
             resolved = self.resolve_task_runtime(task)
-            self._apply_task_retention(resolved, task_state)
+            scopes = self._retention_scopes.get(name)
+            if scopes is None and task_state.get("scopes"):
+                scopes = [v["logical_scope"] for v in task_state["scopes"].values() if v.get("status") == "complete"]
+            self._apply_task_retention(resolved, task_state, scopes)
 
-    def _apply_task_retention(self, task: dict[str, Any], task_state: dict[str, Any]) -> None:
+    def _apply_task_retention(self, task: dict[str, Any], task_state: dict[str, Any], scopes=None) -> None:
         retention = task.get("retention") or normalize_retention({})
         active_policy = retention["active"]
         deleted_policy = retention["deleted"]
 
         active_groups: dict[str, list[dict[str, Any]]] = {}
         for key, state in task_state.get("files", {}).items():
+            if scopes is not None and not any(key == p or key.startswith(p + "/") for p in scopes):
+                continue
             versions = state.get("versions") or []
             if versions:
                 active_groups[key] = versions
@@ -2468,6 +2575,8 @@ class BackupEngine:
         deleted_candidates: list[dict[str, Any]] = []
         eligible_generations: list[dict[str, Any]] = []
         for key, state in list(task_state.get("files", {}).items()):
+            if scopes is not None and not any(key == p or key.startswith(p + "/") for p in scopes):
+                continue
             for generation in list(state.get("deleted_generations") or []):
                 deleted_at = parse_iso(generation["deleted_at"])
                 age_days = max(0, (now_local() - deleted_at).days)

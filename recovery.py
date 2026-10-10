@@ -33,6 +33,8 @@ def recover(engine, destination=None, as_of=None):
             if candidates:
                 records.append((logical, max(candidates, key=lambda v: parse_iso(v['created']))))
     if failures:
+        engine.state.data.setdefault('recovery',{}).update(last_attempt=dt.datetime.now(dt.timezone.utc).isoformat(),last_result='failed',failure_count=len(failures))
+        engine.state.save()
         print(json.dumps({'verified': False, 'failures': failures}, indent=2))
         return 4
     if destination:
@@ -59,5 +61,9 @@ def recover(engine, destination=None, as_of=None):
         finally:
             if staging.exists():
                 shutil.rmtree(staging)
+    evidence=engine.state.data.setdefault('recovery',{})
+    evidence.update(last_verify=dt.datetime.now(dt.timezone.utc).isoformat(),last_result='success',verified_files=sum(len(v.get('versions',[]))+sum(len(g.get('versions',[])) for g in v.get('deleted_generations',[])) for t in engine.state.data.get('tasks',{}).values() for v in t.get('files',{}).values()))
+    if destination: evidence.update(last_restore=dt.datetime.now(dt.timezone.utc).isoformat(),restored_files=len(records),restore_kind='configuration-files')
+    engine.state.save()
     print(json.dumps({'verified': True, 'restored_files': len(records) if destination else 0}))
     return 0

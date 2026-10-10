@@ -13,3 +13,11 @@ Start with the project-level `README.md` and `configbackup.example.yaml`, then u
 - `schedule-analysis.md` — cross-system task timelines, historical run durations, potential overlaps, and per-report exclusions.
 - `state-and-recovery.md` — internal state, run manifests, interruption/recovery behavior, and backup-state considerations.
 - `../SECURITY.md` — credentials, sensitive collected content, and destructive-operation safeguards.
+
+## 2.0 additions
+
+- [Release/migration](release-2.0.0.md)
+- [Operations, email and runtime history](operations.md)
+- [Guided configuration and authentication launchers](configuration-tools.md)
+- [Read-only access and permission audits](read-only-access.md)
+- [Host/storage/firewall/SMART coverage](host-coverage.md)

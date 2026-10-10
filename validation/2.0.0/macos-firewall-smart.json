@@ -1,0 +1,56 @@
+{
+  "identical": 8,
+  "changed": [],
+  "sections": [
+    {
+      "path": "firewall/application/state",
+      "status": "complete",
+      "error": ""
+    },
+    {
+      "path": "firewall/application/block-all",
+      "status": "complete",
+      "error": ""
+    },
+    {
+      "path": "firewall/application/stealth",
+      "status": "complete",
+      "error": ""
+    },
+    {
+      "path": "firewall/application/signed-apps",
+      "status": "complete",
+      "error": ""
+    },
+    {
+      "path": "firewall/application/applications",
+      "status": "complete",
+      "error": ""
+    },
+    {
+      "path": "firewall/pf-definitions",
+      "status": "complete",
+      "error": ""
+    },
+    {
+      "path": "firewall/pf-rules",
+      "status": "failed",
+      "error": "pfctl: pfctl: /dev/pf: Permission denied"
+    },
+    {
+      "path": "firewall/pf-nat",
+      "status": "failed",
+      "error": "pfctl: pfctl: /dev/pf: Permission denied"
+    },
+    {
+      "path": "storage/drive-identities/discovery",
+      "status": "complete",
+      "error": ""
+    },
+    {
+      "path": "storage/drive-identities/af97d49c1f157896c82ec37d8fca1f586144e504f3511bfc04c35a480fed6292",
+      "status": "complete",
+      "error": ""
+    }
+  ]
+}

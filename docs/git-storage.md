@@ -1,4 +1,4 @@
-> **1.6.0:** [Migration, changed behavior, new options, and limitations](release-1.6.0.md) supersede older descriptions below, especially collector failure handling, telemetry paths, and time zones.
+> **2.0.0:** Read [current release notes](release-2.0.0.md) and the [1.6 safety migration](release-1.6.0.md). New profiles, telemetry paths and section-level preservation supersede older descriptions below.
 
 # Git / GitHub snapshot storage
 

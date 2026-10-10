@@ -1,0 +1,26 @@
+{
+  "status": "passed",
+  "databases": [
+    "cbtest_33bc42f9_a",
+    "cbtest_33bc42f9_b",
+    "cbtest_33bc42f9_c"
+  ],
+  "native_backup": "/var/opt/mssql/data/cbtest_33bc42f9.bak",
+  "determinism": {
+    "comparison_representation_only": 0,
+    "identical": 149,
+    "added": 0,
+    "removed": 0,
+    "changed": 1,
+    "csv_row_order_only": 0
+  },
+  "checks": [
+    "real SqlPackage extraction",
+    "two-run comparison",
+    "OFFLINE fault isolation",
+    "RESTORING fault isolation",
+    "healthy before/after updates committed",
+    "failed archive and Git unchanged",
+    "recovery next run"
+  ]
+}

@@ -1,0 +1,2 @@
+Parsed 21 YAML files; monitoring example validated; access script examples generated.
+Parsed 6 PowerShell scripts, including generated Windows launcher.

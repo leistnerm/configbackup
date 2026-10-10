@@ -27,8 +27,9 @@ from typing import Any, Iterable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from completeness import publish, section
+from sections import enabled as section_enabled
 
-COLLECTOR_VERSION = "1.6.0"
+COLLECTOR_VERSION = "2.0.0"
 
 
 def eprint(msg: str) -> None:
@@ -209,8 +210,6 @@ def collect_macos(root: Path, args: argparse.Namespace, failures: list[dict[str,
     if not args.skip_accounts:
         commands.update({'security/users.txt':['/usr/bin/dscl','.','-list','/Users','UniqueID'],
                          'security/groups.txt':['/usr/bin/dscl','.','-list','/Groups','PrimaryGroupID']})
-    if not args.skip_firewall:
-        commands['security/firewall.txt']=['/usr/libexec/ApplicationFirewall/socketfilterfw','--getglobalstate']
     for name, command in commands.items():
         try:
             result=run(command, check=True)
@@ -265,40 +264,11 @@ def collect_linux(root: Path, args: argparse.Namespace, failures: list[dict[str,
         },
     )
 
-    if command_exists("lsblk"):
-        cp = run(["lsblk", "--json", "--bytes", "--output", "NAME,KNAME,PATH,SIZE,TYPE,FSTYPE,FSVER,LABEL,UUID,PARTUUID,PARTLABEL,PTTYPE,MODEL,SERIAL,WWN,TRAN,ROTA,RO,RM,HOTPLUG,MOUNTPOINTS"], timeout=60)
-        if cp.returncode == 0:
-            try:
-                data = json.loads(cp.stdout)
-                stable_json(root / "storage" / "lsblk.json", data)
-            except Exception as exc:
-                failures.append({"section": "storage.lsblk", "error": str(exc), "required": "false"})
-    for src, out in [
-        ("/etc/fstab", root / "storage" / "fstab.txt"),
-        ("/etc/crypttab", root / "storage" / "crypttab.txt"),
-    ]:
-        p = Path(src)
-        if p.exists():
-            stable_text(out, p.read_text(encoding="utf-8", errors="replace"))
-
-    for command, outfile in [
-        (["findmnt", "--json", "--bytes", "--all"], "mounts.json"),
-        (["pvs", "--reportformat", "json", "--units", "b", "--nosuffix", "-a"], "lvm-pvs.json"),
-        (["vgs", "--reportformat", "json", "--units", "b", "--nosuffix", "-a"], "lvm-vgs.json"),
-        (["lvs", "--reportformat", "json", "--units", "b", "--nosuffix", "-a", "-o", "+devices"], "lvm-lvs.json"),
-        (["mdadm", "--detail", "--scan"], "mdraid.conf"),
-        (["multipath", "-ll"], "multipath.txt"),
-    ]:
-        if command_exists(command[0]):
-            cp = run(command, timeout=60)
-            if cp.returncode == 0:
-                if outfile.endswith(".json"):
-                    try:
-                        stable_json(root / "storage" / outfile, json.loads(cp.stdout))
-                    except Exception:
-                        stable_text(root / "storage" / outfile.replace(".json", ".txt"), cp.stdout)
-                else:
-                    stable_text(root / "storage" / outfile, cp.stdout)
+    for name in ('fstab','crypttab'):
+        source=Path('/etc')/name
+        if source.exists() and section_enabled('storage/etc'):
+            try: stable_text(root/'storage/etc'/(name+'.txt'),source.read_text())
+            except OSError as exc: failures.append({'section':'storage/etc/'+name,'error':str(exc)})
 
     # Network current configuration.
     for command, outfile in [
@@ -450,10 +420,6 @@ def collect_linux(root: Path, args: argparse.Namespace, failures: list[dict[str,
             safe = str(p).lstrip("/").replace("/", "__")
             stable_text(software / "repositories" / safe, p.read_text(encoding="utf-8", errors="replace"))
 
-    if command_exists("lsmod"):
-        cp = run(["lsmod"])
-        if cp.returncode == 0:
-            stable_text(root / "hardware" / "loaded-kernel-modules.txt", cp.stdout)
 
     # Users/groups without password hashes.
     if not args.skip_accounts:
@@ -468,22 +434,6 @@ def collect_linux(root: Path, args: argparse.Namespace, failures: list[dict[str,
         ]
         stable_csv(root / "accounts" / "users.csv", sorted(users, key=lambda r: (int(r["uid"]), r["name"])))
         stable_json(root / "accounts" / "groups.json", sorted(groups, key=lambda r: (int(r["gid"]), r["name"])))
-
-    if not args.skip_firewall:
-        if command_exists("nft"):
-            cp = run(["nft", "-j", "list", "ruleset"], timeout=60)
-            if cp.returncode == 0:
-                try:
-                    fw_data = strip_runtime_fields(json.loads(cp.stdout), {"packets", "bytes"})
-                    stable_json(root / "network" / "firewall-nftables.json", fw_data)
-                except Exception:
-                    stable_text(root / "network" / "firewall-nftables.txt", cp.stdout)
-        elif command_exists("iptables-save"):
-            cp = run(["iptables-save"], timeout=60)
-            if cp.returncode == 0:
-                stable_text(root / "network" / "firewall-iptables.txt", cp.stdout)
-
-
 
 WINDOWS_FIREWALL_CSV_FIELDS = [
     "Summary", "Name", "DisplayName", "Enabled", "Direction", "Action", "Profile",
@@ -568,12 +518,12 @@ def collect_windows(root: Path, args: argparse.Namespace, failures: list[dict[st
 
     # Storage topology including Storage Spaces when present.
     storage_queries = {
-        "disks.json": "Get-Disk | Sort-Object Number | Select-Object Number,FriendlyName,SerialNumber,UniqueId,Path,Location,BusType,PartitionStyle,OperationalStatus,HealthStatus,IsBoot,IsSystem,IsOffline,IsReadOnly,Size,LogicalSectorSize,PhysicalSectorSize",
+        "disks.json": "Get-Disk | Sort-Object Number | Select-Object Number,FriendlyName,SerialNumber,UniqueId,Path,Location,BusType,PartitionStyle,IsBoot,IsSystem,IsOffline,IsReadOnly,Size,LogicalSectorSize,PhysicalSectorSize",
         "partitions.json": "Get-Partition | Sort-Object DiskNumber,PartitionNumber | Select-Object DiskNumber,PartitionNumber,DriveLetter,AccessPaths,Type,GptType,MbrType,IsActive,IsBoot,IsSystem,Size,Offset",
-        "volumes.json": "Get-Volume | Sort-Object DriveLetter,Path | Select-Object DriveLetter,Path,FileSystemLabel,FileSystem,DriveType,HealthStatus,OperationalStatus,Size,UniqueId,AllocationUnitSize",
-        "storage-pools.json": "Get-StoragePool | Sort-Object FriendlyName | Select-Object FriendlyName,UniqueId,HealthStatus,OperationalStatus,IsPrimordial,IsReadOnly,Size,AllocatedSize,ResiliencySettingNameDefault,ProvisioningTypeDefault",
-        "virtual-disks.json": "Get-VirtualDisk | Sort-Object FriendlyName | Select-Object FriendlyName,UniqueId,HealthStatus,OperationalStatus,ResiliencySettingName,ProvisioningType,NumberOfDataCopies,PhysicalDiskRedundancy,Size,FootprintOnPool,Interleave,NumberOfColumns,WriteCacheSize",
-        "physical-disks.json": "Get-PhysicalDisk | Sort-Object FriendlyName,SerialNumber | Select-Object FriendlyName,SerialNumber,UniqueId,MediaType,BusType,CanPool,CannotPoolReason,HealthStatus,OperationalStatus,Usage,Size,AllocatedSize,SpindleSpeed",
+        "volumes.json": "Get-Volume | Sort-Object DriveLetter,Path | Select-Object DriveLetter,Path,FileSystemLabel,FileSystem,DriveType,Size,UniqueId,AllocationUnitSize",
+        "storage-pools.json": "Get-StoragePool | Sort-Object FriendlyName | Select-Object FriendlyName,UniqueId,IsPrimordial,IsReadOnly,Size,ResiliencySettingNameDefault,ProvisioningTypeDefault",
+        "virtual-disks.json": "Get-VirtualDisk | Sort-Object FriendlyName | Select-Object FriendlyName,UniqueId,ResiliencySettingName,ProvisioningType,NumberOfDataCopies,PhysicalDiskRedundancy,Size,Interleave,NumberOfColumns,WriteCacheSize",
+        "physical-disks.json": "Get-PhysicalDisk | Sort-Object FriendlyName,SerialNumber | Select-Object FriendlyName,SerialNumber,UniqueId,MediaType,BusType,CanPool,CannotPoolReason,Usage,Size,SpindleSpeed",
     }
     for outfile, script in storage_queries.items():
         data = best_effort("storage." + outfile, lambda s=script: run_ps_json(s), failures)
@@ -613,17 +563,6 @@ def collect_windows(root: Path, args: argparse.Namespace, failures: list[dict[st
         if data is not None:
             stable_json(root / "network" / outfile, data)
 
-    smb_shares = best_effort("shares.smb", lambda: run_ps_json(
-        "if (Get-Command Get-SmbShare -ErrorAction SilentlyContinue) { Get-SmbShare | Sort-Object Name | ForEach-Object { $s=$_; [pscustomobject]@{Name=$s.Name;Path=$s.Path;Description=$s.Description;ScopeName=$s.ScopeName;Special=$s.Special;Temporary=$s.Temporary;FolderEnumerationMode=[string]$s.FolderEnumerationMode;CachingMode=[string]$s.CachingMode;ContinuouslyAvailable=$s.ContinuouslyAvailable;Access=@(Get-SmbShareAccess -Name $s.Name -ErrorAction SilentlyContinue | Sort-Object AccountName,AccessRight | Select-Object AccountName,AccessControlType,AccessRight)} } }"
-    ), failures)
-    if smb_shares is not None:
-        stable_json(root / "shares" / "smb-shares.json", smb_shares)
-
-    nfs_shares = best_effort("shares.nfs", lambda: run_ps_json(
-        "if (Get-Command Get-NfsShare -ErrorAction SilentlyContinue) { Get-NfsShare | Sort-Object Name | Select-Object Name,Path,NetworkName,Authentication,EnableAnonymousAccess,AnonymousUid,AnonymousGid,Permission,AllowRootAccess }"
-    ), failures)
-    if nfs_shares is not None:
-        stable_json(root / "shares" / "nfs-shares.json", nfs_shares)
 
     # Services / scheduled tasks.
     services = best_effort("services", lambda: run_ps_json(
@@ -743,17 +682,17 @@ foreach($event in $events){{
 
     if not args.skip_firewall:
         fw_profiles = best_effort("network.firewall-profiles", lambda: run_ps_json(
-            "Get-NetFirewallProfile -PolicyStore ActiveStore | Sort-Object Name | Select-Object Name,Enabled,DefaultInboundAction,DefaultOutboundAction,AllowInboundRules,AllowLocalFirewallRules,NotifyOnListen,LogFileName,LogMaxSizeKilobytes,LogAllowed,LogBlocked"
+            "Get-NetFirewallProfile -PolicyStore ActiveStore -ErrorAction Stop | Sort-Object Name | Select-Object Name,Enabled,DefaultInboundAction,DefaultOutboundAction,AllowInboundRules,AllowLocalFirewallRules,NotifyOnListen,LogFileName,LogMaxSizeKilobytes,LogAllowed,LogBlocked"
         ), failures)
-        firewall_script = r'''$rules = @(Get-NetFirewallRule -PolicyStore ActiveStore | Sort-Object DisplayName,Name)
+        firewall_script = r'''$rules = @(Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction Stop | Sort-Object DisplayName,Name)
 foreach ($r in $rules) {
-    $address = $r | Get-NetFirewallAddressFilter -ErrorAction SilentlyContinue
-    $port = $r | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue
-    $application = $r | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue
-    $service = $r | Get-NetFirewallServiceFilter -ErrorAction SilentlyContinue
-    $interface = $r | Get-NetFirewallInterfaceFilter -ErrorAction SilentlyContinue
-    $interfaceType = $r | Get-NetFirewallInterfaceTypeFilter -ErrorAction SilentlyContinue
-    $security = $r | Get-NetFirewallSecurityFilter -ErrorAction SilentlyContinue
+    $address = $r | Get-NetFirewallAddressFilter -ErrorAction Stop
+    $port = $r | Get-NetFirewallPortFilter -ErrorAction Stop
+    $application = $r | Get-NetFirewallApplicationFilter -ErrorAction Stop
+    $service = $r | Get-NetFirewallServiceFilter -ErrorAction Stop
+    $interface = $r | Get-NetFirewallInterfaceFilter -ErrorAction Stop
+    $interfaceType = $r | Get-NetFirewallInterfaceTypeFilter -ErrorAction Stop
+    $security = $r | Get-NetFirewallSecurityFilter -ErrorAction Stop
 
     [pscustomobject]@{
         Name = $r.Name
@@ -832,6 +771,16 @@ def main() -> int:
     parser.add_argument("--include-task-history", action="store_true", help="Capture Windows Task Scheduler completed-run durations from Operational event log (volatile output)")
     parser.add_argument("--task-history-days", type=int, default=60, help="Task Scheduler history lookback (default: 60 days)")
     parser.add_argument("--include-performance", action="store_true", help="Collect volatile host statistics outside configuration manifests")
+    parser.add_argument("--include-network-runtime",action="store_true",help="Optional listening ports, processes and client share observations outside config/Git")
+    parser.add_argument('--include-drive-health',action='store_true',help='Read SMART/NVMe and Windows reliability data; no tests or setting changes')
+    parser.add_argument('--smart-config',help='Optional YAML selecting SMART devices and controller types')
+    parser.add_argument('--smart-device',action='append',default=[],help='Explicit SMART device path; repeat for several drives')
+    parser.add_argument("--capacity-path", action="append", default=[], help="Local path whose volume capacity should be measured")
+    parser.add_argument('--sysctl-key',action='append',default=[],help='Additional exact Linux effective sysctl key')
+    parser.add_argument('--registry-config',help='YAML registry allowlist additions/overrides (Windows)')
+    parser.add_argument('--skip-registry',action='store_true',help='Disable selected Windows registry inventory')
+    parser.add_argument('--include-rsop',action='store_true',help='Collect effective computer/current-user Group Policy XML (Windows)')
+    parser.add_argument('--rsop-user',action='append',default=[],help='Additional DOMAIN\\user for RSoP, never a password')
     parser.add_argument("--strict", action="store_true", help="Fail if any best-effort section cannot be collected")
     args = parser.parse_args()
     if not args.output:
@@ -852,7 +801,9 @@ def main() -> int:
     })
 
     try:
-        if os.name == "nt":
+        if not section_enabled("configuration"):
+            pass
+        elif os.name == "nt":
             info("Collecting Windows guest configuration")
             collect_windows(root, args, failures)
         elif sys.platform == "darwin":
@@ -869,7 +820,7 @@ def main() -> int:
         stable_json(root / "collection-errors.json", failures)
         return 1
 
-    if args.include_performance:
+    if args.include_performance and section_enabled("telemetry/performance"):
         telemetry_failures=[]
         if os.name=='nt':
             counters=best_effort('host-performance',lambda:run_ps_json(
@@ -886,11 +837,43 @@ def main() -> int:
                 try:stable_text(root/'telemetry'/('proc-'+name.replace('/','-')+'.txt'),source.read_text())
                 except OSError as exc:telemetry_failures.append({'section':name,'error':str(exc)})
         stable_json(root/'telemetry'/'collection-status.json',{'failures':telemetry_failures})
+    if args.capacity_path and section_enabled("telemetry/capacity"):
+        from telemetry import collect_disks, write_envelope
+        write_envelope(root/'telemetry'/'health.json', collect_disks(args.capacity_path))
+    storage_scopes=[]
+    def enrich(scope, action):
+        try:
+            selected_scopes,selected_failures=action()
+            storage_scopes.extend(selected_scopes);failures.extend(selected_failures)
+        except Exception as exc:
+            storage_scopes.append(section(root,scope,'failed',str(exc)))
+            failures.append({'section':scope,'error':str(exc)})
+    if os.name!='nt':
+        from storage_inventory import collect as collect_storage
+        enrich('storage',lambda:collect_storage(root,include_health=args.include_performance))
+        from host_details import collect as collect_details
+        enrich('kernel',lambda:collect_details(root,extra_sysctls=args.sysctl_key))
+    else:
+        from windows_settings import collect_registry,collect_rsop
+        if not args.skip_registry:
+            enrich('registry',lambda:collect_registry(root,powershell_executable(),args.registry_config))
+        if args.include_rsop:
+            enrich('policy/rsop',lambda:collect_rsop(root,args.rsop_user))
+    if not args.skip_firewall and os.name!='nt':
+        from firewall_inventory import collect as collect_firewall
+        enrich('firewall',lambda:collect_firewall(root))
+    from network_inventory import collect as collect_network
+    enrich('shares',lambda:collect_network(root,run_ps_json,runtime=args.include_network_runtime))
+    if args.include_drive_health:
+        from drive_health import collect as collect_drives
+        enrich('storage/drive-identities',lambda:collect_drives(root,args.smart_config,args.smart_device,run_ps_json))
     stable_json(root / "collection-errors.json", failures)
     # Individual output files are the certified scopes. Missing files are never
     # evidence of removal when command discovery/access may vary across runs.
-    scopes = [section(root, p.relative_to(root).as_posix()) for p in sorted(root.rglob('*'))
-              if p.is_file() and p.name != 'collection-manifest.json' and 'telemetry' not in p.relative_to(root).parts]
+    scopes = [section(root, p.relative_to(root).as_posix(), 'complete' if section_enabled(p.relative_to(root).parts[0]) else 'disabled') for p in sorted(root.rglob('*'))
+              if p.is_file() and p.name != 'collection-manifest.json' and 'telemetry' not in p.relative_to(root).parts
+              and not any(p.relative_to(root).as_posix()==s['path'] or p.relative_to(root).as_posix().startswith(s['path']+'/') for s in storage_scopes)]
+    scopes.extend(storage_scopes)
     if failures:
         scopes.append(section(root, '_incomplete-discovery', 'failed', 'See collection-errors.json'))
     publish(root, scopes)

@@ -1,0 +1,9 @@
+{
+  "status": "passed",
+  "checks": [
+    "real pgstattuple approximate bloat, populated 12000-row table, half deleted",
+    "table/index/TOAST sizes",
+    "isolated cluster health",
+    "no query failures"
+  ]
+}

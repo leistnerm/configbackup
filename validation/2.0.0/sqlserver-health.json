@@ -1,0 +1,13 @@
+{
+  "status": "passed",
+  "checks": [
+    "real SAMPLED rowstore density and fragmentation on >128-page table",
+    "columnstore rowgroup telemetry on populated table",
+    "file/log/backup/partition health",
+    "no query failures"
+  ],
+  "index_rows": 1,
+  "density_percent": [
+    43.7611069928342
+  ]
+}

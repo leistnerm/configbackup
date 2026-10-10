@@ -1,0 +1,83 @@
+{
+  "postgresql": {
+    "failed_scopes": [
+      {
+        "path": "databases/cb_healthy",
+        "status": "failed",
+        "error": "Database collection incomplete"
+      }
+    ],
+    "complete_scopes": 10,
+    "certified_files": 42
+  },
+  "sqlserver": {
+    "failed_scopes": [
+      {
+        "path": "instance/agent/jobs",
+        "status": "failed",
+        "error": "Native Agent script export requires full service visibility; direct catalogs collected instead"
+      },
+      {
+        "path": "instance/agent/agent-settings.json",
+        "status": "failed",
+        "error": "Agent service settings are not certified by read-only catalog access"
+      },
+      {
+        "path": "instance/ssis",
+        "status": "failed",
+        "error": "Complete visibility unavailable with this account; privileged scripts/services preserved. ReadOnlyAccess supports checked catalogs and explicit Agent catalog reads."
+      },
+      {
+        "path": "databases/cb_features",
+        "status": "failed",
+        "error": "Read-only permission audit found write or application-procedure execution rights; review inherited permissions before using this profile"
+      }
+    ],
+    "complete_scopes": 35,
+    "certified_files": 77
+  },
+  "write_rejections": {
+    "name": "cbtest_read_0d2f7fde",
+    "pg_return_1": 6,
+    "pg_return_2": 6,
+    "pg_writes": {
+      "insert": {
+        "rejected": true,
+        "error": "ERROR:  permission denied for table proof"
+      },
+      "ddl": {
+        "rejected": true,
+        "error": "ERROR:  permission denied for schema public\nLINE 1: CREATE TABLE public.denied(id int);\n                     ^"
+      },
+      "role": {
+        "rejected": true,
+        "error": "ERROR:  permission denied to create role\nDETAIL:  Only roles with the CREATEROLE attribute may create roles."
+      },
+      "alter": {
+        "rejected": true,
+        "error": "ERROR:  must be owner of table proof"
+      }
+    },
+    "sql_create": 0,
+    "sql_collect": 6,
+    "sql_cleanup": 0
+  },
+  "sql_write_rejections": [
+    {
+      "rejected": true,
+      "query": "INSERT dbo.proof VALUES(2);"
+    },
+    {
+      "rejected": true,
+      "query": "CREATE TABLE dbo.denied(id int);"
+    },
+    {
+      "rejected": true,
+      "query": "ALTER TABLE dbo.proof ADD nope int;"
+    },
+    {
+      "rejected": true,
+      "query": "sp_add_job"
+    }
+  ]
+}

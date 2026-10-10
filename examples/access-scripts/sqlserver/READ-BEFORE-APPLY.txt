@@ -1,0 +1,17 @@
+Run as an administrator after reviewing the generated SQL. These scripts do not create logins or store passwords.
+
+Use a NEW dedicated account. Existing ownership, inherited roles, PUBLIC grants and executable privileged procedures/functions can add write powers.
+
+The grants add read/metadata access only. They cannot universally prove that an arbitrary existing account has no write path.
+
+Read access can expose confidential data, SQL text and job commands. Protect output and inspect the audit results.
+
+No database is modified by the generator. Applying the SQL changes permissions; no data or application objects are changed.
+
+Use the collector read-only access profile. Privileged instance script exports and protected services can remain failed/preserved. See docs/read-only-access.md.
+
+SQL Server: authenticate the login with Windows/Kerberos where available, or provision its password outside this script. Run the collector with -ReadOnlyAccess.
+
+Metadata access does not grant SELECT on application tables. Performance DMVs can expose workload text. Job catalog SELECT exposes commands, potentially including embedded credentials.
+
+Rerun for newly selected databases. Offline/restoring databases cannot receive database grants until accessible. The script stops on SQL errors; rerunning existing grants is safe.

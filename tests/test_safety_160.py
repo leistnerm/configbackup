@@ -109,7 +109,7 @@ class SafetyTests(unittest.TestCase):
         with zipfile.ZipFile(buf,'w') as z:z.writestr('package.dtsx',b'pwd=credential_value')
         self.assertTrue(scan_bytes(buf.getvalue(),'p.ispac'));data=b'pwd=credential_value'
         self.assertFalse(scan_bytes(data,'x',[hashlib.sha256(data).hexdigest()]));self.assertFalse(scan_bytes(b'pwd=<REDACTED>','x'))
-    def test_archive_io_failure_rolls_back_only_its_task(self):
+    def test_archive_io_failure_rolls_back_only_its_scope(self):
         with tempfile.TemporaryDirectory() as td:
             base=Path(td);root=base/'source';root.mkdir()
             for name in ('a','b'):(root/name).write_text('old '+name)
@@ -123,10 +123,11 @@ class SafetyTests(unittest.TestCase):
                 return original(task,src,logical,*args,**kwargs)
             with patch.object(engine,'_store_one_file',side_effect=failing):
                 self.assertEqual(self.run_engine(engine),4)
-            self.assertEqual(engine.state.task('sql'),before)
-            self.assertEqual((base/'git/sql/a').read_text(),'old a')
+            self.assertEqual(engine.state.task('sql')['files']['sql/b'],before['files']['sql/b'])
+            self.assertEqual(engine.state.task('sql')['scopes']['b']['status'],'failed')
+            self.assertEqual((base/'git/sql/a').read_text(),'new a')
             self.assertEqual((base/'git/sql/b').read_text(),'old b')
-            versions=[v['path'] for f in before['files'].values() for v in f['versions']]
+            versions=[v['path'] for f in engine.state.task('sql')['files'].values() for v in f['versions']]
             archived=[p.relative_to(engine.root).as_posix() for p in engine.archive_root.rglob('*') if p.is_file() and not p.is_relative_to(engine.internal_root)]
             self.assertCountEqual(versions,archived)
     def test_secret_failure_can_be_fixed_next_run(self):

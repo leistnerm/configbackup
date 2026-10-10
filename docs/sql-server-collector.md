@@ -410,3 +410,7 @@ For a rolling SQL Agent job-runtime report consumed by the new scheduling analyz
 ```
 
 This writes `instance/agent/job-runs.csv` with job-level execution times/durations. It changes as jobs run; add `**/job-runs.csv` to `git.ignore` (even when `storage: both` preserves the file in filesystem history). See `docs/schedule-analysis.md`.
+
+## 2.0 additions
+
+See [read-only-access.md](read-only-access.md) and [release notes](release-2.0.0.md) for new options, tested coverage and limitations.
