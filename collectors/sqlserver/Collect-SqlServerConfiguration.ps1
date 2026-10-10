@@ -14,7 +14,7 @@
     dbatools instance scripts by default.
 
 .NOTES
-    Collector version: 2.0.0
+    Collector version: 2.0.1
     Requires:
       - PowerShell 5.1+ (PowerShell 7+ recommended)
       - dbatools PowerShell module
@@ -117,7 +117,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$CollectorVersion = '2.0.0'
+$CollectorVersion = '2.0.1'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Write-CollectorMessage {

@@ -21,3 +21,5 @@ Start with the project-level `README.md` and `configbackup.example.yaml`, then u
 - [Guided configuration and authentication launchers](configuration-tools.md)
 - [Read-only access and permission audits](read-only-access.md)
 - [Host/storage/firewall/SMART coverage](host-coverage.md)
+
+- [Database connection/access diagnostics](database-diagnostics.md)

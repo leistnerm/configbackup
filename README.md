@@ -1,4 +1,4 @@
-# ConfigBackup 2.0.0
+# ConfigBackup 2.0.1
 
 Read [the 2.0.0 migration and safety notes](docs/release-2.0.0.md) before upgrading. The engine and collectors must be upgraded together. See [validation evidence](VALIDATION.md) for tested and unverified behavior.
 
@@ -51,6 +51,8 @@ python configure.py --config configbackup.yaml
 ```
 
 Read [operations and email](docs/operations.md), [host coverage](docs/host-coverage.md), [launcher/authentication setup](docs/configuration-tools.md), and [read-only database access](docs/read-only-access.md). Runtime data stays outside certified configuration/Git by default. [VALIDATION.md](VALIDATION.md) records actual tests and remaining platform limits.
+
+The configuration editor also offers **Database connection tests**. It runs real collectors in disposable scratch space and reports section availability without modifying archives or Git. See [database diagnostics](docs/database-diagnostics.md).
 
 ## Requirements
 

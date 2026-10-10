@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Guided, cross-platform ConfigBackup YAML editor. Does not run collectors or send mail."""
+"""Guided YAML editor with explicitly selected, temporary database access tests."""
 from __future__ import annotations
 import argparse
 import copy
@@ -49,6 +49,14 @@ def validate(config, kind='backup'):
         selections(config);return
     if kind=='backup':
         ConfigLoader(Path('configuration.yaml'))._resolve(config)
+        from database_diagnostics import validate as validate_diagnostic
+        profiles=config.get('database_diagnostics',[])
+        if not isinstance(profiles,list):raise ValueError('database_diagnostics must be a list')
+        names=set()
+        for profile in profiles:
+            validate_diagnostic(profile)
+            if not profile.get('name') or profile['name'] in names:raise ValueError('Diagnostic profile names must be nonempty and unique')
+            names.add(profile['name'])
         monitor=config.get('monitoring') or {}
     elif kind=='monitor':monitor=config.get('monitoring',config)
     else:
@@ -225,12 +233,68 @@ def access_wizard(input_fn=input):
     print('Generated for administrator review; nothing was applied: '+', '.join(str(p) for p in files))
 
 
+def diagnostic_profile(input_fn=input):
+    engine=choice('Database engine',['sqlserver','postgresql'],input_fn)
+    if not engine:return None
+    profile={'name':ask('Unique diagnostic profile name',input_fn=input_fn),'engine':engine,
+             'access_profile':choice('Use the same access profile as your collector',['read-only','full'],input_fn) or 'read-only'}
+    if engine=='sqlserver':
+        profile['server']=ask('SQL instance or host,port',input_fn=input_fn)
+        profile['pwsh']=ask('PowerShell executable','pwsh',input_fn)
+        profile['sqlpackage']=ask('SqlPackage executable','sqlpackage',input_fn)
+        profile['trust_server_certificate']=boolean('Trust server certificate without validation (test servers only)',False,input_fn)
+        if boolean('Use SQL authentication instead of the process integrated identity',False,input_fn):
+            profile['user']=ask('SQL login',input_fn=input_fn)
+            profile['password_env']=ask('Existing password environment variable name (not its value)','CONFIGBACKUP_SQL_PASSWORD',input_fn)
+    else:
+        profile['host']=ask('Host (blank to use libpq defaults)',input_fn=input_fn)
+        profile['port']=int(ask('Port','5432',input_fn))
+        profile['user']=ask('User (blank to use libpq defaults)',input_fn=input_fn)
+        profile['service']=ask('libpq service name (blank if unused)',input_fn=input_fn)
+        profile['bin_dir']=ask('PostgreSQL client bin directory (blank for PATH)',input_fn=input_fn)
+        profile['maintenance_db']=ask('Maintenance database','postgres',input_fn)
+        print('Authentication uses libpq service/pgpass/peer/Kerberos or an existing environment secret.')
+        profile['password_env']=ask('Password environment variable name (blank for libpq authentication)',input_fn=input_fn)
+    profile['databases']=json_value('Database names/patterns; empty list discovers all eligible databases',[],input_fn)
+    profile['schema']=boolean('Test real schema extraction (may take several minutes)',True,input_fn)
+    profile['include_health']=boolean('Test optional health queries',False,input_fn)
+    profile['include_history']=boolean('Test scheduler history reads',False,input_fn)
+    profile['timeout']=int(ask('Overall collector timeout in seconds','600',input_fn))
+    from database_diagnostics import validate as validate_diagnostic
+    validate_diagnostic(profile)
+    return profile
+
+
+def diagnostics_wizard(config,input_fn=input):
+    from database_diagnostics import diagnose,display,write_report
+    profiles=config.setdefault('database_diagnostics',[])
+    print('Tests use a separate diagnostic profile: match its identity, database filters and section switches to your collector. Custom task wrappers are not run.')
+    while True:
+        action=choice('Database connection tests',['Add profile','Edit profile','Test profile','Remove profile','Back'],input_fn)
+        if action in (None,'Back'):return
+        if action=='Add profile':
+            profile=diagnostic_profile(input_fn)
+            if profile:profiles.append(profile)
+            continue
+        if not profiles:print('Add a diagnostic profile first.');continue
+        labels=[str(p.get('name','unnamed'))+' ('+str(p.get('engine','unknown'))+')' for p in profiles]
+        selected=choice('Choose diagnostic profile',labels,input_fn)
+        if selected is None:continue
+        index=labels.index(selected)
+        if action=='Edit profile':edit_mapping(profiles[index],input_fn)
+        elif action=='Remove profile':profiles.pop(index)
+        else:
+            result=diagnose(profiles[index],progress=print);display(result)
+            path=ask('Optional new JSON report path (blank to keep only on screen)',input_fn=input_fn)
+            if path:write_report(result,path);print('Saved diagnostic report: '+path)
+
+
 def wizard(config,path,kind,input_fn=input):
     original=copy.deepcopy(config)
     while True:
         choices=['Tasks','Monitoring sources','Alert rules','Notification channels','Global switches','Show configuration','Validate','Save','Quit without saving'] if kind=='backup' else ['Sources','Report/analysis settings','Show configuration','Validate','Save','Quit without saving'] if kind=='schedule' else ['Monitoring sources','Alert rules','Notification channels','Global switches','Show configuration','Validate','Save','Quit without saving']
         if kind=='registry':choices=['Registry selections','Default registry selections','Show configuration','Validate','Save','Quit without saving']
-        if kind=='backup':choices.insert(5,'Generate startup launcher');choices.insert(6,'Generate database access scripts')
+        if kind=='backup':choices.insert(5,'Generate startup launcher');choices.insert(6,'Generate database access scripts');choices.insert(7,'Database connection tests')
         action=choice('ConfigBackup configuration editor',choices,input_fn)
         if action in (None,'Quit without saving'):return False
         try:
@@ -238,6 +302,7 @@ def wizard(config,path,kind,input_fn=input):
             if action=='Registry selections':manage(config.setdefault('registry',[]),'Registry selections',new_registry,input_fn)
             elif action=='Generate startup launcher':launcher_wizard(path,input_fn)
             elif action=='Generate database access scripts':access_wizard(input_fn)
+            elif action=='Database connection tests':diagnostics_wizard(config,input_fn)
             elif action=='Default registry selections':config['include_defaults']=boolean('Include the built-in selected settings',config.get('include_defaults',True),input_fn)
             elif action=='Tasks':
                 manage(config.setdefault('tasks',[]),'Backup tasks',lambda inp:template_tasks(choice('Task template',['Directory','SQL Server','PostgreSQL','System'],inp),inp),input_fn)
@@ -266,7 +331,7 @@ def wizard(config,path,kind,input_fn=input):
                 print('Saving reformats YAML. A byte-for-byte backup preserves the previous file and its comments.')
                 if boolean('Save configuration',True,input_fn):
                     backup=save(config,path,kind);print('Saved '+str(path)+('; backup: '+str(backup) if backup else ''));return True
-        except (ValueError,TypeError,KeyError,ConfigError) as exc:print('Please correct:',exc)
+        except (ValueError,TypeError,KeyError,OSError,ConfigError) as exc:print('Please correct:',exc)
 
 
 def main(argv=None):
@@ -274,9 +339,22 @@ def main(argv=None):
     parser.add_argument('--config',default='configbackup.yaml')
     parser.add_argument('--kind',choices=['backup','monitor','schedule','registry'],default='backup')
     parser.add_argument('--check',action='store_true',help='Validate without opening the wizard')
+    parser.add_argument('--diagnose-database',metavar='PROFILE',help='Run a named database_diagnostics profile in disposable scratch space')
+    parser.add_argument('--diagnostic-report',help='Optional new JSON output file; never overwritten')
     args=parser.parse_args(argv);path=Path(args.config)
     config=yaml.safe_load(path.read_text()) if path.exists() else {}
     config=config or {}
+    if args.check and args.diagnose_database:parser.error('Choose --check or --diagnose-database')
+    if args.diagnostic_report and not args.diagnose_database:parser.error('--diagnostic-report requires --diagnose-database')
+    if args.diagnose_database:
+        from database_diagnostics import diagnose,display,write_report
+        matches=[p for p in config.get('database_diagnostics',[]) if p.get('name')==args.diagnose_database]
+        if len(matches)!=1:parser.error('Choose a unique database_diagnostics profile name')
+        try:
+            result=diagnose(matches[0],progress=print);display(result)
+            if args.diagnostic_report:write_report(result,args.diagnostic_report)
+        except (ValueError,OSError) as exc:print('Diagnostic error:',exc);return 2
+        return 0 if result['status'] in ('complete','disabled') else 6 if result['status']=='partial' else 1
     if args.check:validate(config,args.kind);print('Configuration valid');return 0
     if args.kind=='backup' and not config:config={'backup':{'root':ask('Backup archive root')},'tasks':[]}
     try:wizard(config,path,args.kind)

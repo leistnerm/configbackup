@@ -1,0 +1,150 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-10-10T02:32:23.348037+00:00",
+  "name": "pg-admin",
+  "engine": "postgresql",
+  "access_profile": "full",
+  "connection": {
+    "status": "connected",
+    "database": "postgres",
+    "identity": "postgres",
+    "version": "17.11 (Debian 17.11-1.pgdg13+2)",
+    "permissions": {
+      "superuser": true,
+      "bypass_rls": true,
+      "pg_monitor": true,
+      "pg_read_all_data": true
+    }
+  },
+  "status": "complete",
+  "sections": [
+    {
+      "section": "cluster",
+      "status": "available",
+      "files_verified": 7,
+      "reason": ""
+    },
+    {
+      "section": "config",
+      "status": "available",
+      "files_verified": 4,
+      "reason": ""
+    },
+    {
+      "section": "replication",
+      "status": "available",
+      "files_verified": 1,
+      "reason": ""
+    },
+    {
+      "section": "databases/cb_healthy/database.json",
+      "status": "available",
+      "files_verified": 1,
+      "reason": ""
+    },
+    {
+      "section": "databases/cb_healthy/inventory",
+      "status": "available",
+      "files_verified": 15,
+      "reason": ""
+    },
+    {
+      "section": "databases/cb_healthy/objects",
+      "status": "available",
+      "files_verified": 92,
+      "reason": ""
+    },
+    {
+      "section": "databases/cb_healthy/replication",
+      "status": "available",
+      "files_verified": 2,
+      "reason": ""
+    },
+    {
+      "section": "databases/cb_healthy/schedulers",
+      "status": "available",
+      "files_verified": 6,
+      "reason": ""
+    },
+    {
+      "section": "databases/cb_healthy/schema.sql",
+      "status": "available",
+      "files_verified": 1,
+      "reason": ""
+    },
+    {
+      "section": "database-map.csv",
+      "status": "available",
+      "files_verified": 1,
+      "reason": ""
+    },
+    {
+      "section": "collector.json",
+      "status": "available",
+      "files_verified": 1,
+      "reason": ""
+    },
+    {
+      "section": "telemetry/cb_healthy/health.json#activity",
+      "status": "available",
+      "reason": "Runtime query completed; values are not archived by this test."
+    },
+    {
+      "section": "telemetry/cb_healthy/health.json#database",
+      "status": "available",
+      "reason": "Runtime query completed; values are not archived by this test."
+    },
+    {
+      "section": "telemetry/cb_healthy/health.json#index",
+      "status": "available",
+      "reason": "Runtime query completed; values are not archived by this test."
+    },
+    {
+      "section": "telemetry/cb_healthy/health.json#partition",
+      "status": "available",
+      "reason": "Runtime query completed; values are not archived by this test."
+    },
+    {
+      "section": "telemetry/cb_healthy/health.json#statistics",
+      "status": "available",
+      "reason": "Runtime query completed; values are not archived by this test."
+    },
+    {
+      "section": "telemetry/cb_healthy/health.json#table",
+      "status": "available",
+      "reason": "Runtime query completed; values are not archived by this test."
+    },
+    {
+      "section": "telemetry/cluster-health.json#archive",
+      "status": "available",
+      "reason": "Runtime query completed; values are not archived by this test."
+    },
+    {
+      "section": "telemetry/cluster-health.json#replication",
+      "status": "available",
+      "reason": "Runtime query completed; values are not archived by this test."
+    },
+    {
+      "section": "telemetry/cluster-health.json#slot",
+      "status": "available",
+      "reason": "Runtime query completed; values are not archived by this test."
+    },
+    {
+      "section": "telemetry/cluster-health.json#tablespace",
+      "status": "available",
+      "reason": "Runtime query completed; values are not archived by this test."
+    },
+    {
+      "section": "telemetry/cluster-health.json#wal",
+      "status": "available",
+      "reason": "Runtime query completed; values are not archived by this test."
+    },
+    {
+      "section": "external service adapters and remote host configuration",
+      "status": "not_tested",
+      "reason": "SSRS/SSAS/WSFC adapters and remote operating-system privileges need separate tests."
+    }
+  ],
+  "scope_note": "Actual collector test using this diagnostic profile and identity. Settings/permissions may change. Backup tasks and service adapters are not executed.",
+  "collector_exit_code": 0
+}

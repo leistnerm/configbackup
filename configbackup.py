@@ -39,7 +39,7 @@ except ImportError:  # pragma: no cover
 from completeness import Coverage, MANIFEST
 
 APP_NAME = "ConfigBackup"
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.0.1"
 STATE_VERSION = 1
 PHASES = ["pre_run", "pre_backup", "backup", "post_backup", "post_run"]
 TASK_TYPES = {"execute", "command", "file", "directory", "glob"}

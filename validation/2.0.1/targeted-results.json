@@ -1,0 +1,17 @@
+{
+  "status": "passed",
+  "cases": {
+    "missing-client": {
+      "status": "incomplete",
+      "connection": "not_tested"
+    },
+    "closed-port": {
+      "status": "incomplete",
+      "connection": "failed"
+    },
+    "schema-disabled": {
+      "status": "complete",
+      "connection": "connected"
+    }
+  }
+}

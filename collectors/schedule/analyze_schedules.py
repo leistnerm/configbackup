@@ -26,7 +26,7 @@ from typing import Any, Callable
 
 import yaml
 
-VERSION = '2.0.0'
+VERSION = '2.0.1'
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from completeness import Coverage, MANIFEST

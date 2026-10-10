@@ -67,3 +67,7 @@ For optional database health, populate the templates below in NEW disposable dat
 
 - [SQL health fixture](fixtures/sqlserver-health.sql.template)
 - [PostgreSQL health fixture](fixtures/postgresql-health.sql.template)
+
+## Configuration CLI diagnostics
+
+Add `--diagnostics` to `read_only_access_live.py` commands above to exercise the actual CLI before grants, after grants and with a nonexistent login. Results are written as sanitized JSON reports, and temporary identities/databases are removed. Diagnostic runtime is additional to the original grant/extraction test.
