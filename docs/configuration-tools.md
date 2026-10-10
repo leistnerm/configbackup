@@ -8,7 +8,7 @@ python configure.py --kind registry --config /path/to/windows-registry.yaml
 python configure.py --config /path/to/configbackup.yaml --check
 ```
 
-The editor adds, edits, duplicates, removes and enables/disables items. It asks for common values and accepts JSON for advanced nested settings. Save validates first, creates a byte-for-byte dated backup, then atomically replaces the YAML. Comments/formatting are not preserved in the new YAML; they remain in the backup. The editor does not execute collectors, change database permissions, register scheduled tasks or send messages.
+The editor adds, edits, duplicates, removes and enables/disables items. It asks for common values and accepts JSON for advanced nested settings. Save validates first, creates a byte-for-byte dated backup, then atomically replaces the YAML. Comments/formatting are not preserved in the new YAML; they remain in the backup. Ordinary editing does not execute collectors, change database permissions, register scheduled tasks or send messages. The explicitly selected **Database connection tests** menu runs collectors in disposable scratch space; see [connection/access diagnostics](database-diagnostics.md).
 
 Tasks use `enabled: false`. `sections` maps exact names or glob patterns to booleans or `{enabled: false}`; a disabled parent keeps all children disabled. Collectors and manifest consumers preserve previous output for disabled scopes. New enrichment probes skip their disabled reads. Some legacy host collectors still perform read-only discovery before their output is marked disabled. Turning Git off converts `storage: both` to filesystem; Git-only tasks become disabled. Sources, reports, analysis, monitor rules and channels also have switches.
 

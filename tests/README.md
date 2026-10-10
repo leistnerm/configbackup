@@ -8,7 +8,7 @@ python3 -m unittest discover -s tests -v
 
 ## Coverage
 
-The 2.0 release suite contains 130 tests. Run from the project root so local modules resolve correctly. `test_v2.py` and `test_v2_extended.py` cover section rollback/sealing races, disabled dependency chains, actual staged-blob scanning, retrying Git publication, alert state/rates/staleness, local multipart SMTP delivery, scheduling observations, storage/firewall normalization, drive-health failures, independent runtime retention, and launcher/grant generation. See [release validation](../VALIDATION.md) for live tests and limits.
+The 2.0.1 release suite contains 143 tests, including 13 diagnostics tests. Run from the project root so local modules resolve correctly. `test_v2.py` and `test_v2_extended.py` cover section rollback/sealing races, disabled dependency chains, actual staged-blob scanning, retrying Git publication, alert state/rates/staleness, local multipart SMTP delivery, scheduling observations, storage/firewall normalization, drive-health failures, independent runtime retention, and launcher/grant generation. See [release validation](../VALIDATION.md) for live tests and limits.
 
 ## Inherited scheduling and determinism checks
 

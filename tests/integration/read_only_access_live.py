@@ -36,6 +36,7 @@ def main():
     parser.add_argument('--pwsh', default='pwsh')
     parser.add_argument('--module-path')
     parser.add_argument('--sqlpackage')
+    parser.add_argument('--diagnostics', action='store_true', help='Also test the configuration CLI diagnostics before/after grants and with a nonexistent login')
     args = parser.parse_args()
     if not args.confirm_disposable_server:
         parser.error('--confirm-disposable-server is required')
@@ -113,6 +114,20 @@ if($Mode -eq 'create-reader') {
                            str(ROOT / 'collectors/sqlserver/Collect-SqlServerConfiguration.ps1'),
                            '-OutputDirectory', str(out / 'snapshot'), '-SqlPackage', args.sqlpackage])
 
+    def diagnostic(label, user=None):
+        profile={'name':'fixture','engine':args.engine,'user':user or name,'password_env':'CB_TEST_DIAGNOSTIC_PASSWORD',
+                 'databases':[name],'access_profile':'read-only','timeout':600}
+        if args.engine=='postgresql':profile.update(host=args.host,port=args.port,bin_dir=args.bin_dir)
+        else:profile.update(server=args.server,pwsh=args.pwsh,sqlpackage=args.sqlpackage,trust_server_certificate=True)
+        path=out/(label+'-config.json');path.write_text(json.dumps({'database_diagnostics':[profile]}))
+        report=out/(label+'-report.json')
+        with (out/(label+'.log')).open('w') as log:
+            cp=subprocess.run([sys.executable,str(ROOT/'configure.py'),'--config',str(path),'--diagnose-database','fixture','--diagnostic-report',str(report)],
+                              env={**env,'CB_TEST_DIAGNOSTIC_PASSWORD':password},stdout=log,stderr=subprocess.STDOUT,timeout=660)
+        data=json.loads(report.read_text())
+        assert cp.returncode in (0,1,6),label
+        return data
+
     try:
         if args.engine == 'postgresql':
             query('CREATE ROLE ' + name + " LOGIN PASSWORD '" + password + "';")
@@ -124,6 +139,10 @@ if($Mode -eq 'create-reader') {
         query('CREATE DATABASE ' + name + ';')
         created_database = True
         query('CREATE TABLE proof(id int PRIMARY KEY); INSERT INTO proof VALUES(1);', database=name)
+        if args.diagnostics:
+            before=diagnostic('before-grants')
+            assert before['connection']['status']=='connected',before['connection']
+            assert not any(r['status']=='available' and r['section'].startswith('databases/'+name) for r in before['sections'])
         if args.engine == 'postgresql':
             for script in ('grant-cluster-read-access.sql', 'grant-file-settings-read.sql'):
                 query((out / 'grants' / script).read_text())
@@ -162,6 +181,15 @@ if($Mode -eq 'create-reader') {
             raise AssertionError('Test database schema was not certified')
         result.update(status='passed', certified_database_files=len(paths),
                       unavailable_scopes=[s['path'] for s in coverage.sections if s['status'] == 'failed'])
+        if args.diagnostics:
+            after=diagnostic('after-grants')
+            assert after['connection']['status']=='connected',after['connection']
+            assert any(r['status']=='available' and r['section'].startswith('databases/'+name) for r in after['sections'])
+            failed=diagnostic('nonexistent-login',name+'_missing')
+            assert failed['connection']['status']=='failed',failed['connection']
+            assert not any(r['status']=='available' for r in failed['sections'])
+            result['diagnostics']={'before_grants':before['status'],'after_grants':after['status'],
+                                   'nonexistent_login':failed['connection']['status'],'checks':'CLI JSON/console, real permission changes, temporary real collection, missing login'}
     except Exception as exc:
         result['error'] = str(exc)
     finally:

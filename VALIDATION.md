@@ -1,3 +1,22 @@
+# ConfigBackup 2.0.1 diagnostics validation — 2026-10-09
+
+The configuration CLI now tests connections and actual collection access using separate named profiles and private temporary exports. See [usage and scope](docs/database-diagnostics.md). It does not apply grants or run backup/Git tasks.
+
+| Check | Result |
+|---|---|
+| Python suite | **143 tests passed on macOS Python 3.14.8 and Linux Python 3.10**, including 13 new diagnostic tests. These cover independent scopes, incomplete/corrupt manifests, missing secrets, secret redaction, temporary cleanup, actual process timeout, skipped native extraction, runtime failures, report overwrite refusal, CLI exit codes and permission-probe failure distinct from connection failure. |
+| PostgreSQL live | Actual CLI against PostgreSQL 17.11: temporary role connected before grants but could not certify the database; generated grants enabled schema/catalog collection; nonexistent role failed connection. Ordinary writes remained rejected. Temporary role/database cleanup passed. Privileged rich fixture also collected configuration and optional runtime data. |
+| SQL Server live | Actual CLI against SQL Server 2022 CU27: temporary login connected before grants but could not certify the database; generated grants enabled database schema/catalog collection while protected native exports remained unavailable; nonexistent login failed. Data/DDL/Agent-job writes rejected; cleanup passed. An `sa` rich-fixture diagnostic identified unsupported Mac/dbatools exports rather than claiming universal administrator coverage. |
+| Other live diagnostic cases | Missing PostgreSQL client, closed local port and disabled database/native-schema extraction behaved as reported. No failed connection/client case reported any available configuration section. |
+| Static checks | Python source parsed, all 22 YAML examples parsed, diagnostic examples validated, six PowerShell scripts parsed including the new driver. |
+| Safety | Test exports used fresh private temporary directories; reports contained statuses/reasons and no exported definitions. Password references used existing environment/libpq mechanisms. Known test credentials were checked for absence from packaged files. No real backup configuration, archive, Git repository or service permissions were changed by diagnostics. The disposable integration harness intentionally applied grants to its own temporary identities. |
+
+Current evidence is in `validation/2.0.1/`. The existing read-access integration harness accepts `--diagnostics` to reproduce before/after-grant CLI tests. Profiles must match the intended collector's identity/settings; custom task wrappers are not inferred or executed. Actual exports may take time and acquire schema locks. Unavailable means this test failed, not necessarily that a permission grant will fix it.
+
+Windows integrated authentication/process-tree termination, enterprise service adapters and other collector options outside these profiles remain unverified. Diagnostic results are point-in-time observations, not a guarantee of future access or a formal proof of arbitrary role safety. The earlier engine, storage, alerting and advanced-feature evidence below is retained as **2.0.0 baseline evidence**, not a claim that every old live scenario was repeated for 2.0.1. Core collection logic is unchanged apart from release-version identifiers.
+
+---
+
 # ConfigBackup 2.0.0 validation — 2026-10-09
 
 The release implements the features below with explicit limits. It is not a complete backup of every installed service or a replacement for native database-data and machine backups. Deploy the engine, shared modules and collectors together; read [upgrade notes](docs/release-2.0.0.md).

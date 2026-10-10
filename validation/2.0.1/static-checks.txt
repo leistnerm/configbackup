@@ -1,0 +1,2 @@
+All Python source parsed; 22 YAML examples parsed; diagnostic profiles validated.
+Parsed 6 PowerShell scripts, including the diagnostic driver.

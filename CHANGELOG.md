@@ -1,3 +1,9 @@
+# 2.0.1 — 2026-10-09
+
+- Added guided database diagnostic profiles and `configure.py --diagnose-database NAME` with optional protected JSON reports.
+- Probe connections/identity/permission indicators, then test actual collectors in disposable scratch space. Report verified available, unavailable, disabled, not applicable and not tested scopes; no archive/Git/grant changes.
+- Added timeout cleanup, secret-reference validation/redaction, native-extraction opt-out labeling, health-query failures, tests and live before/after-grant diagnostics. Custom task wrappers and external enterprise-service adapters are outside the diagnostic scope.
+
 # 2.0.0 — 2026-10-09
 
 - Added optional SQL/PostgreSQL/system health telemetry, persistent numeric history, capacity growth/counter analysis, threshold/hysteresis/debounce alerts, maintenance windows and notification retries.

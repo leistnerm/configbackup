@@ -31,3 +31,7 @@ A live pg_cron fixture had a PUBLIC DELETE grant on its history table. The audit
 Tests created temporary identities, applied generated grants, verified reads and native schema extraction, and rejected INSERT/ALTER/CREATE operations. SQL Agent job creation was also rejected. The audit caught inherited permissions and preserved affected sections.
 
 Neither the scripts nor the audit formally prove that every arbitrary installed extension, C function, ownership chain or publicly executable procedure is harmless. Existing identities may have rights unrelated to these scripts. Run audits under your access-control process; use an isolated reporting/replica environment when stronger enforcement is required. Filesystem, Windows service/GPO, SSIS/SSRS/SSAS and cluster privileges are separate from database grants. No Windows integrated authentication or enterprise service read-only profile was tested here.
+
+## Test the account before scheduling
+
+The configuration editor now provides [Database connection tests](database-diagnostics.md). It shows actual per-section collector outcomes, including protected exports that remain unavailable, without changing backups or applying permissions. Repeat after grants change.

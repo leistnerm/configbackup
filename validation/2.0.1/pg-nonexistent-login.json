@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-10-10T02:32:50.270886+00:00",
+  "name": "fixture",
+  "engine": "postgresql",
+  "access_profile": "read-only",
+  "connection": {
+    "status": "failed",
+    "reason": "Connection/identity probe failed. Check endpoint, credentials, TLS, maintenance database and client compatibility."
+  },
+  "status": "incomplete",
+  "sections": [
+    {
+      "section": "configuration",
+      "status": "not_tested",
+      "reason": "No valid finalized collector manifest; no section can be certified."
+    },
+    {
+      "section": "optional health telemetry",
+      "status": "not_tested",
+      "reason": "Not requested by this diagnostic profile."
+    },
+    {
+      "section": "external service adapters and remote host configuration",
+      "status": "not_tested",
+      "reason": "SSRS/SSAS/WSFC adapters and remote operating-system privileges need separate tests."
+    }
+  ],
+  "scope_note": "Actual collector test using this diagnostic profile and identity. Settings/permissions may change. Backup tasks and service adapters are not executed.",
+  "collector_exit_code": 2
+}
