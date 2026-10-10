@@ -46,3 +46,7 @@ Run new configurations with `--validate` and `--dry-run` before scheduling them 
 ## SQL Server on Linux host artifacts
 
 When the SQL collector runs locally on a Linux SQL Server guest it can copy `/var/opt/mssql/mssql.conf` and systemd service configuration. These files normally contain configuration rather than database credentials, but they can reveal certificate/key paths, directory layout, service environment references, domain/account names, ports, and other operationally sensitive information. Treat them as confidential and review local customizations before pushing them to a remote Git repository. The parsed `mssql-settings.csv` redacts keys whose names look password/secret/token related, but the raw `mssql.conf` is preserved verbatim for recoverability.
+
+## 2.0 runtime/authentication boundaries
+
+Runtime telemetry, alerts and raw history are separate from certified configuration and excluded from Git by default. Protect them as potentially sensitive operational records. Launchers contain named secret references, not values; environment injection is not protection from privileged process inspection. SqlPackage SQL-authentication connection strings can still be visible in child-process arguments. Prefer integrated authentication where required. Read-only grant scripts add no write roles, but existing/PUBLIC privileges and privileged routines require audit; this is not a formal proof of an account's capabilities. See docs/configuration-tools.md and docs/read-only-access.md.

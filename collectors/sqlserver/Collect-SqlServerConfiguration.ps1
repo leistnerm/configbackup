@@ -14,7 +14,7 @@
     dbatools instance scripts by default.
 
 .NOTES
-    Collector version: 1.6.0
+    Collector version: 2.0.0
     Requires:
       - PowerShell 5.1+ (PowerShell 7+ recommended)
       - dbatools PowerShell module
@@ -53,10 +53,15 @@ param(
 
     [switch]$SkipSchema,
     [switch]$SkipInstanceExport,
+    [switch]$ReadOnlyAccess,
     # Include frequently-changing size/usage counters in an inventory-only file.
     # Disabled by default to keep SQL configuration diffs meaningful.
     [switch]$IncludeCapacityMetrics,
     [switch]$IncludePerformanceMetrics,
+    [switch]$IncludeHealthMetrics,
+    [switch]$IncludeIndexHealth,
+    [ValidateRange(1,300)][int]$HealthQueryTimeout = 15,
+    [ValidateRange(1,1000)][int]$HealthIndexLimit = 25,
 
     [switch]$SkipInventory,
     [switch]$IncludeAgentHistory,
@@ -112,7 +117,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$CollectorVersion = '1.6.0'
+$CollectorVersion = '2.0.0'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Write-CollectorMessage {
@@ -1367,18 +1372,38 @@ $script:CollectionSections = @()
 $script:HadrDetectionError = $null
 $script:RequireServerVisibility = $false
 $script:IsSqlSysadmin = $false
+$script:ReadOnlyServerVisible = $false
 function Save-CollectionManifest {
     param([bool]$Finalized = $false)
-    $payload = [ordered]@{schema_version=1; run_id=[string]$env:CONFIGBACKUP_RUN_ID; finalized=$Finalized; sections=@($script:CollectionSections)}
+    $payload = [ordered]@{schema_version=1; collected_at=[DateTime]::UtcNow.ToString('o'); run_id=[string]$env:CONFIGBACKUP_RUN_ID; finalized=$Finalized; sections=@($script:CollectionSections)}
     $temp = Join-Path $OutputDirectory 'collection-manifest.json.tmp'
     Write-StableJson -Path $temp -Value $payload -Depth 20
     Move-Item -LiteralPath $temp -Destination (Join-Path $OutputDirectory 'collection-manifest.json') -Force
 }
+function Test-SectionEnabled {
+    param([string]$Name)
+    if (-not $env:CONFIGBACKUP_SECTIONS) { return $true }
+    $settings = $env:CONFIGBACKUP_SECTIONS | ConvertFrom-Json
+    foreach ($property in $settings.PSObject.Properties) {
+        $value=$property.Value
+        $active=if ($value -is [bool]) { $value } elseif ($null -ne $value.PSObject.Properties['enabled']) { $value.enabled } else { $true }
+        if (-not $active -and ($Name -like $property.Name -or $Name -like ($property.Name.TrimEnd('/')+'/*'))) { return $false }
+    }
+    return $true
+}
 function Invoke-CollectionSection {
     param([string]$Path, [scriptblock]$Action)
+    if (-not (Test-SectionEnabled $Path)) {
+        $script:CollectionSections += [ordered]@{path=$Path;status='disabled';error='Disabled by configuration';files=@{}}
+        Save-CollectionManifest; return
+    }
     $status = 'complete'; $errorText = ''; $files = [ordered]@{}
     try {
-        if ($script:RequireServerVisibility -and -not $script:IsSqlSysadmin -and $Path -match '^instance/(catalog|scripts|agent|ssis)(/|$)') { throw 'sysadmin is required to certify complete instance metadata' }
+        if ($script:RequireServerVisibility -and -not $script:IsSqlSysadmin -and $Path -match '^instance/(catalog|scripts|agent|ssis)(/|$)') {
+            if (-not ($ReadOnlyAccess -and $script:ReadOnlyServerVisible -and $Path -match '^instance/(catalog|agent)/' -and $Path -notmatch '^instance/agent/jobs(/|$)')) {
+                throw 'Complete visibility unavailable with this account; privileged scripts/services preserved. ReadOnlyAccess supports checked catalogs and explicit Agent catalog reads.'
+            }
+        }
         & $Action
         $target = Join-Path $OutputDirectory $Path
         if (Test-Path -LiteralPath $target) {
@@ -1422,7 +1447,7 @@ try {
     $resolvedSqlPackage = $null
     $sqlPackageVersion = $null
     $script:SqlPackageError = $null
-    if (-not $SkipSchema) {
+    if (-not $SkipSchema -and (Test-SectionEnabled 'schema')) {
       try {
         if (Test-Path -LiteralPath $SqlPackagePath) {
             $resolvedSqlPackage = (Resolve-Path -LiteralPath $SqlPackagePath).Path
@@ -1460,6 +1485,14 @@ try {
     $visibility = Invoke-QueryTable -ServerObject $server -DatabaseName 'master' -Query "SELECT IS_SRVROLEMEMBER(N'sysadmin') AS allowed;"
     $script:IsSqlSysadmin = ($visibility.Rows.Count -eq 1 -and [int]$visibility.Rows[0]['allowed'] -eq 1)
     $script:RequireServerVisibility = $true
+    if ($ReadOnlyAccess) {
+        $readVisibility = Invoke-QueryTable -ServerObject $server -DatabaseName 'master' -Query "SELECT CASE WHEN HAS_PERMS_BY_NAME(NULL,NULL,'VIEW ANY DEFINITION')=1 AND HAS_PERMS_BY_NAME(NULL,NULL,'VIEW ANY DATABASE')=1 AND HAS_PERMS_BY_NAME(NULL,NULL,'VIEW SERVER STATE')=1 THEN 1 ELSE 0 END AS allowed;"
+        $script:ReadOnlyServerVisible = ($readVisibility.Rows.Count -eq 1 -and [int]$readVisibility.Rows[0]['allowed'] -eq 1)
+        if ([int]$server.VersionMajor -ge 16) {
+            $extra = Invoke-QueryTable -ServerObject $server -DatabaseName 'master' -Query "SELECT CASE WHEN HAS_PERMS_BY_NAME(NULL,NULL,'VIEW ANY SECURITY DEFINITION')=1 AND HAS_PERMS_BY_NAME(NULL,NULL,'VIEW SERVER PERFORMANCE STATE')=1 THEN 1 ELSE 0 END AS allowed;"
+            $script:ReadOnlyServerVisible = $script:ReadOnlyServerVisible -and [int]$extra.Rows[0]['allowed'] -eq 1
+        }
+    }
 
     $requestedDatabases = @(Expand-NameList $Database)
     $excludedDatabases = @(Expand-NameList $ExcludeDatabase)
@@ -1569,7 +1602,7 @@ try {
     $allFileGroupRows = @()
     $allSpaceRows = @()
 
-    if (-not $SkipInventory) {
+    if (-not $SkipInventory -and (Test-SectionEnabled 'inventory')) {
         $instanceCatalogs = @{
             'configuration' = 'SELECT name,value,minimum,maximum,is_dynamic,is_advanced,description FROM sys.configurations ORDER BY name;'
             'features' = "SELECT CONVERT(nvarchar(128),SERVERPROPERTY('Edition')) AS edition, CONVERT(nvarchar(128),SERVERPROPERTY('ProductVersion')) AS product_version, CONVERT(int,SERVERPROPERTY('IsFullTextInstalled')) AS fulltext_installed, CONVERT(int,SERVERPROPERTY('IsIntegratedSecurityOnly')) AS integrated_security_only, CONVERT(int,SERVERPROPERTY('IsHadrEnabled')) AS hadr_enabled, CONVERT(nvarchar(128),SERVERPROPERTY('FilestreamConfiguredLevel')) AS filestream_configured_level;"
@@ -1628,10 +1661,32 @@ try {
     }
 
     if (-not $SkipAgent) {
+      if ($ReadOnlyAccess -and -not $script:IsSqlSysadmin) {
+        # Direct base-table reads avoid SQLAgentReaderRole, which can create jobs.
+        # File-level boundaries preserve existing privileged SMO job scripts.
+        $readAgentQueries = [ordered]@{
+            'jobs.csv' = "SELECT j.name AS Name,j.enabled AS Enabled,SUSER_SNAME(j.owner_sid) AS Owner,c.name AS Category,j.description AS Description,j.start_step_id AS StartStepID,(SELECT COUNT(*) FROM msdb.dbo.sysjobsteps x WHERE x.job_id=j.job_id) AS StepCount,(SELECT COUNT(*) FROM msdb.dbo.sysjobschedules x WHERE x.job_id=j.job_id) AS ScheduleCount FROM msdb.dbo.sysjobs j LEFT JOIN msdb.dbo.syscategories c ON j.category_id=c.category_id ORDER BY j.name;"
+            'job-steps.csv' = 'SELECT j.name AS job_name,s.step_id,s.step_name,s.subsystem,s.command,s.database_name,s.on_success_action,s.on_success_step_id,s.on_fail_action,s.on_fail_step_id,s.retry_attempts,s.retry_interval,s.output_file_name,s.proxy_id FROM msdb.dbo.sysjobsteps s JOIN msdb.dbo.sysjobs j ON j.job_id=s.job_id ORDER BY j.name,s.step_id;'
+            'schedules.csv' = 'SELECT schedule_id,schedule_uid,name,enabled,freq_type,freq_interval,freq_subday_type,freq_subday_interval,freq_relative_interval,freq_recurrence_factor,active_start_date,active_end_date,active_start_time,active_end_time FROM msdb.dbo.sysschedules ORDER BY name,schedule_id;'
+            'schedule-jobs.csv' = 'SELECT s.name AS schedule_name,j.name AS job_name FROM msdb.dbo.sysjobschedules js JOIN msdb.dbo.sysschedules s ON js.schedule_id=s.schedule_id JOIN msdb.dbo.sysjobs j ON js.job_id=j.job_id ORDER BY s.name,j.name;'
+            'operators.csv' = 'SELECT name,enabled,email_address,pager_address FROM msdb.dbo.sysoperators ORDER BY name;'
+            'alerts.csv' = 'SELECT name,message_id,severity,enabled,delay_between_responses,include_event_description,database_name,notification_message FROM msdb.dbo.sysalerts ORDER BY name;'
+            'categories.csv' = 'SELECT category_id,category_class,category_type,name FROM msdb.dbo.syscategories ORDER BY name,category_id;'
+        }
+        foreach ($filename in $readAgentQueries.Keys) {
+            Invoke-CollectionSection ('instance/agent/'+$filename) {
+                $table=Invoke-QueryTable -ServerObject $server -DatabaseName 'msdb' -Query $readAgentQueries[$filename]
+                Write-StableCsv -Path (Join-Path $instanceDirectory ('agent/'+$filename)) -Rows (Convert-DataTableRows $table)
+            }
+        }
+        $script:CollectionSections += [ordered]@{path='instance/agent/jobs';status='failed';error='Native Agent script export requires full service visibility; direct catalogs collected instead';files=@{}}
+        $script:CollectionSections += [ordered]@{path='instance/agent/agent-settings.json';status='failed';error='Agent service settings are not certified by read-only catalog access';files=@{}}
+      } else {
         Invoke-CollectionSection 'instance/agent' {
         Export-SqlAgentConfiguration -ServerObject $server -TargetDirectory (Join-Path $instanceDirectory 'agent')
         } # Agent config section
-        if ($IncludeAgentHistory) {
+      }
+        if ($IncludeAgentHistory -and (Test-SectionEnabled 'telemetry/history')) {
           try {
             # step_id=0 identifies the entire job execution (not each step).
             # Run date/time and duration are kept as raw SQL Agent integers;
@@ -1643,9 +1698,11 @@ SELECT TOP (20000)
 FROM msdb.dbo.sysjobhistory AS h
 JOIN msdb.dbo.sysjobs AS j ON h.job_id=j.job_id
 WHERE h.run_date >= CONVERT(int, CONVERT(varchar(8), DATEADD(day, -$AgentHistoryDays, GETDATE()), 112))
-ORDER BY j.name, h.run_date DESC, h.run_time DESC, h.instance_id DESC;
+ORDER BY h.run_date DESC, h.run_time DESC, h.instance_id DESC;
 "@
             Write-StableCsv -Path (Join-Path $OutputDirectory 'telemetry/agent/job-runs.csv') -Rows (Convert-DataTableRows (Invoke-QueryTable -ServerObject $server -DatabaseName 'msdb' -Query $historyQuery))
+            $runningQuery = "SELECT j.name AS job_name,CONVERT(varchar(33),a.start_execution_date,126) AS start_time FROM msdb.dbo.sysjobactivity a JOIN msdb.dbo.sysjobs j ON a.job_id=j.job_id WHERE a.session_id=(SELECT MAX(session_id) FROM msdb.dbo.syssessions) AND a.start_execution_date IS NOT NULL AND a.stop_execution_date IS NULL ORDER BY j.name;"
+            Write-StableCsv -Path (Join-Path $OutputDirectory 'telemetry/agent/running-jobs.csv') -Rows (Convert-DataTableRows (Invoke-QueryTable -ServerObject $server -DatabaseName 'msdb' -Query $runningQuery))
           }
           catch { Write-CollectorError "Agent history unavailable: $($_.Exception.Message)" }
         }
@@ -1684,8 +1741,13 @@ ORDER BY j.name, h.run_date DESC, h.run_time DESC, h.instance_id DESC;
         $stateTable = Invoke-QueryTable -ServerObject $server -DatabaseName 'master' -Query ("SELECT state_desc FROM sys.databases WHERE name=" + (Get-SqlLiteral $db.Name))
         if ($stateTable.Rows.Count -ne 1 -or [string]$stateTable.Rows[0]['state_desc'] -ne 'ONLINE') { throw 'Database is restoring, offline, transitional, or no longer visible' }
         $visibility = Invoke-QueryTable -ServerObject $server -DatabaseName $db.Name -Query "SELECT CASE WHEN USER_NAME()=N'dbo' OR IS_SRVROLEMEMBER(N'sysadmin')=1 THEN 1 ELSE 0 END AS can_view;"
+        if ($ReadOnlyAccess) {
+            $visibility=Invoke-QueryTable -ServerObject $server -DatabaseName $db.Name -Query "SELECT CASE WHEN HAS_PERMS_BY_NAME(DB_NAME(),'DATABASE','VIEW DEFINITION')=1 AND HAS_PERMS_BY_NAME(DB_NAME(),'DATABASE','VIEW DATABASE STATE')=1 AND NOT EXISTS (SELECT 1 FROM sys.database_permissions p JOIN sys.user_token t ON p.grantee_principal_id=t.principal_id WHERE p.state='D' AND p.permission_name IN ('VIEW DEFINITION','SELECT','CONTROL')) THEN 1 ELSE 0 END AS can_view;"
+            $writeAccess=Invoke-QueryTable -ServerObject $server -DatabaseName $db.Name -Query "SELECT 'table_write' AS kind,SCHEMA_NAME(schema_id)+'.'+name AS name FROM sys.tables WHERE is_ms_shipped=0 AND (HAS_PERMS_BY_NAME(QUOTENAME(SCHEMA_NAME(schema_id))+'.'+QUOTENAME(name),'OBJECT','INSERT')=1 OR HAS_PERMS_BY_NAME(QUOTENAME(SCHEMA_NAME(schema_id))+'.'+QUOTENAME(name),'OBJECT','UPDATE')=1 OR HAS_PERMS_BY_NAME(QUOTENAME(SCHEMA_NAME(schema_id))+'.'+QUOTENAME(name),'OBJECT','DELETE')=1 OR HAS_PERMS_BY_NAME(QUOTENAME(SCHEMA_NAME(schema_id))+'.'+QUOTENAME(name),'OBJECT','ALTER')=1) UNION ALL SELECT 'procedure_execute',SCHEMA_NAME(schema_id)+'.'+name FROM sys.procedures WHERE is_ms_shipped=0 AND HAS_PERMS_BY_NAME(QUOTENAME(SCHEMA_NAME(schema_id))+'.'+QUOTENAME(name),'OBJECT','EXECUTE')=1 UNION ALL SELECT 'database_write',DB_NAME() WHERE HAS_PERMS_BY_NAME(DB_NAME(),'DATABASE','CREATE TABLE')=1 OR HAS_PERMS_BY_NAME(DB_NAME(),'DATABASE','ALTER ANY SCHEMA')=1;"
+            if ($writeAccess.Rows.Count -gt 0) { throw 'Read-only permission audit found write or application-procedure execution rights; review inherited permissions before using this profile' }
+        }
         if ($visibility.Rows.Count -ne 1 -or [int]$visibility.Rows[0]['can_view'] -ne 1) { throw 'Run as dbo or sysadmin to certify complete metadata; lesser permissions can silently hide objects' }
-        if (-not $SkipSchema) {
+        if (-not $SkipSchema -and (Test-SectionEnabled 'schema')) {
             if ($script:SqlPackageError) { throw $script:SqlPackageError }
             # DacFx writes object names to filesystem paths. Do not allow a
             # case-sensitive SQL schema to lose objects on Windows/default macOS.
@@ -1701,7 +1763,7 @@ ORDER BY j.name, h.run_date DESC, h.run_time DESC, h.instance_id DESC;
         $dbDirectory = Join-Path $databaseRoot $safeName
         [System.IO.Directory]::CreateDirectory($dbDirectory) | Out-Null
 
-        if (-not $SkipInventory) {
+        if (-not $SkipInventory -and (Test-SectionEnabled 'inventory')) {
             $metadata = Get-DatabaseMetadata -DatabaseObject $db
             Write-StableJson -Path (Join-Path $dbDirectory 'database.json') -Value $metadata
 
@@ -1764,7 +1826,7 @@ ORDER BY j.name, h.run_date DESC, h.run_time DESC, h.instance_id DESC;
             }
         }
 
-        if (-not $SkipSchema) {
+        if (-not $SkipSchema -and (Test-SectionEnabled 'schema')) {
             $extractArgs = @{
                 Executable      = $resolvedSqlPackage
                 ServerName      = $SqlInstance
@@ -1784,7 +1846,7 @@ ORDER BY j.name, h.run_date DESC, h.run_time DESC, h.instance_id DESC;
 
     Write-StableCsv -Path (Join-Path $OutputDirectory 'database-map.csv') -Rows $databaseMap
 
-    if ($IncludePerformanceMetrics) {
+    if ($IncludePerformanceMetrics -and (Test-SectionEnabled 'telemetry/performance')) {
         $metricQueries = @{
             'waits' = 'SELECT wait_type,waiting_tasks_count,wait_time_ms,signal_wait_time_ms FROM sys.dm_os_wait_stats;'
             'io' = 'SELECT database_id,file_id,num_of_reads,num_of_bytes_read,io_stall_read_ms,num_of_writes,num_of_bytes_written,io_stall_write_ms FROM sys.dm_io_virtual_file_stats(NULL,NULL);'
@@ -1808,12 +1870,28 @@ ORDER BY j.name, h.run_date DESC, h.run_time DESC, h.instance_id DESC;
         Write-StableJson -Path (Join-Path $OutputDirectory 'telemetry/collection-status.json') -Value @{failures=@($metricFailures)}
     }
 
+    if (($IncludeHealthMetrics -or $IncludeIndexHealth) -and (Test-SectionEnabled 'telemetry/health')) {
+        try {
+            . (Join-Path $PSScriptRoot 'SqlHealth.ps1')
+            Export-SqlHealth -ServerObject $server -Databases @($databases | ForEach-Object { $_.Name }) -Target (Join-Path $OutputDirectory 'telemetry/health.json') -QueryTimeout $HealthQueryTimeout -IndexHealth:$IncludeIndexHealth -IndexLimit $HealthIndexLimit
+        } catch {
+            Write-StableJson -Path (Join-Path $OutputDirectory 'telemetry/health-error.json') -Value @{observed_at=[DateTime]::UtcNow.ToString('o');failures=@(@{section='health';error=$_.Exception.Message})}
+        }
+    }
     $expandedSections = @()
     foreach ($entry in $script:CollectionSections) {
         if ($entry.status -eq 'complete' -and $entry.path.StartsWith('databases/')) {
             $paths = @()
-            if (-not $SkipSchema) { $paths += ($entry.path + '/schema') }
-            if (-not $SkipInventory) { foreach ($leaf in @('database.json','files.csv','filegroups.csv','catalog')) { $paths += ($entry.path + '/' + $leaf) } }
+            if (-not $SkipSchema -and (Test-SectionEnabled 'schema')) { $paths += ($entry.path + '/schema') }
+            if (-not $SkipInventory -and (Test-SectionEnabled 'inventory')) { foreach ($leaf in @('database.json','files.csv','filegroups.csv','catalog')) { $paths += ($entry.path + '/' + $leaf) } }
+            if ($SkipSchema -or -not (Test-SectionEnabled 'schema')) {
+                $expandedSections += [ordered]@{path=($entry.path+'/schema');status='disabled';error='Schema collection disabled';files=@{}}
+            }
+            if ($SkipInventory -or -not (Test-SectionEnabled 'inventory')) {
+                foreach ($leaf in @('database.json','files.csv','filegroups.csv','catalog')) {
+                    $expandedSections += [ordered]@{path=($entry.path+'/'+$leaf);status='disabled';error='Inventory collection disabled';files=@{}}
+                }
+            }
             foreach ($scope in $paths) {
                 $subset = [ordered]@{}
                 foreach ($key in $entry.files.Keys) { if ($key -eq $scope -or $key.StartsWith($scope + '/')) { $subset[$key] = $entry.files[$key] } }

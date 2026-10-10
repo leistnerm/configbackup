@@ -1,0 +1,24 @@
+{
+  "status": "passed",
+  "databases": [
+    "cbtest_db3615bc_a",
+    "cbtest_db3615bc_b",
+    "cbtest_db3615bc_c"
+  ],
+  "determinism": {
+    "comparison_representation_only": 4,
+    "identical": 94,
+    "added": 0,
+    "removed": 0,
+    "changed": 3,
+    "csv_row_order_only": 0
+  },
+  "checks": [
+    "live native dumps",
+    "two-run comparison",
+    "exclusive-lock schema failure",
+    "continue following database",
+    "archive and Git preservation",
+    "recovery next run"
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "status": "passed",
+  "database": "cbtest_access_923e95acb6",
+  "engine": "postgresql",
+  "writes": {
+    "insert": {
+      "rejected": true
+    },
+    "create_table": {
+      "rejected": true
+    },
+    "alter_table": {
+      "rejected": true
+    },
+    "create_role": {
+      "rejected": true
+    }
+  },
+  "collector_exit_code": 0,
+  "certified_database_files": 27,
+  "unavailable_scopes": [],
+  "cleanup": "passed"
+}

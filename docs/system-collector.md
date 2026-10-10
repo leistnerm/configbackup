@@ -1,4 +1,4 @@
-> **1.6.0:** [Migration, changed behavior, new options, and limitations](release-1.6.0.md) supersede older descriptions below, especially collector failure handling, telemetry paths, and time zones.
+> **2.0.0:** Read [current release notes](release-2.0.0.md) and the [1.6 safety migration](release-1.6.0.md). New profiles, telemetry paths and section-level preservation supersede older descriptions below.
 
 # Windows/Linux/macOS guest-system collector
 
@@ -182,3 +182,7 @@ System inventories can still be sensitive even without passwords. They can revea
 The Windows scheduled-task inventory now captures explicit weekly/monthly/calendar and repetition trigger properties, not just the trigger's type. To optionally obtain actual runtimes from the Task Scheduler Operational log, use `--include-task-history --task-history-days 60`. The 100/102 event pairs must be present and readable; otherwise duration remains unknown. Because `scheduling/scheduled-task-runs.csv` rolls each day, use a Git-only ignore if you're tracking stable configuration.
 
 On Linux, the collector also produces `scheduling/systemd-timers.csv` with stable `OnCalendar` and monotonic timer definitions for offline schedule analysis. The analyzer reports complex monotonic/event schedules as unknown rather than fabricating exact starts. See `docs/schedule-analysis.md`.
+
+## 2.0 additions
+
+See [host-coverage.md](host-coverage.md) and [release notes](release-2.0.0.md) for new options, tested coverage and limitations.

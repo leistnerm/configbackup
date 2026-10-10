@@ -1,0 +1,43 @@
+{
+  "status": "passed",
+  "checks": [
+    "live LVM across two image-backed PVs",
+    "live mdraid mirror across two image-backed members",
+    "mounted XFS and ext4 geometry",
+    "two-run deterministic storage configuration"
+  ],
+  "changed": [],
+  "unrelated_failed_scopes": [],
+  "cleanup": [
+    {
+      "unmount": "ext4",
+      "success": true
+    },
+    {
+      "unmount": "xfs",
+      "success": true
+    },
+    {
+      "array_stop": true
+    },
+    {
+      "vg_remove": true
+    },
+    {
+      "detach": "member3.img",
+      "success": true
+    },
+    {
+      "detach": "member2.img",
+      "success": true
+    },
+    {
+      "detach": "member1.img",
+      "success": true
+    },
+    {
+      "detach": "member0.img",
+      "success": true
+    }
+  ]
+}

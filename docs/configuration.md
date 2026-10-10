@@ -1,4 +1,4 @@
-> **1.6.0:** [Migration, changed behavior, new options, and limitations](release-1.6.0.md) supersede older descriptions below, especially collector failure handling, telemetry paths, and time zones.
+> **2.0.0:** Read [current release notes](release-2.0.0.md) and the [1.6 safety migration](release-1.6.0.md). New profiles, telemetry paths and section-level preservation supersede older descriptions below.
 
 # Configuration reference
 
@@ -341,3 +341,7 @@ Dependencies may refer to tasks in the same or an earlier phase, never a later p
 - does not commit/push Git.
 
 A backup task dependent on a suppressed `execute` collector is skipped in dry-run because its would-be output does not exist.
+
+## 2.0 additions
+
+See [configuration-tools.md](configuration-tools.md) and [release notes](release-2.0.0.md) for new options, tested coverage and limitations.

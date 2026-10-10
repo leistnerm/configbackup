@@ -1,0 +1,27 @@
+{
+  "status": "passed",
+  "database": "cbtest_access_def32392b8",
+  "engine": "sqlserver",
+  "writes": {
+    "insert": {
+      "rejected": true
+    },
+    "create_table": {
+      "rejected": true
+    },
+    "alter_table": {
+      "rejected": true
+    },
+    "create_agent_job": {
+      "rejected": true
+    }
+  },
+  "collector_exit_code": 6,
+  "certified_database_files": 47,
+  "unavailable_scopes": [
+    "instance/agent/jobs",
+    "instance/agent/agent-settings.json",
+    "instance/ssis"
+  ],
+  "cleanup": "passed"
+}

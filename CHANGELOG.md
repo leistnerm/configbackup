@@ -1,3 +1,13 @@
+# 2.0.0 — 2026-10-09
+
+- Added optional SQL/PostgreSQL/system health telemetry, persistent numeric history, capacity growth/counter analysis, threshold/hysteresis/debounce alerts, maintenance windows and notification retries.
+- Added bounded HTML/text SMTP summaries, HTTPS webhook/ntfy/heartbeat channels, offline interactive operations reports and selective raw runtime retention outside Git.
+- Added observed scheduling analysis, success-only runtime/P95 trends, resource assumptions, dependency/deadline checks, hypothetical shifts and useful-work watchdog checks. Fixed running SQL Agent start-time ingestion.
+- Added guided YAML editing, enable/disable switches, token-free platform launchers with named vault references and administrator-reviewable database read-grant scripts. Read-only collector profiles audit visibility and common inherited write rights; protected sections remain failed/preserved.
+- Added independent Linux/macOS storage/firmware/kernel/driver, selected Windows registry/RSoP, share/firewall and optional SMART/process/socket probes. Added image-backed Linux storage, Mac AppleRAID degradation and isolated Linux firewall integration scripts.
+- Sealed certified bytes before archival; preserved failed scopes through deletion/retention/freshness handling. Scanned actual staged Git blobs; retried pending publication on unchanged runs. Disabled dependency chains no longer prepare Git repositories.
+- Added focused safety/monitoring/launcher/collector tests and live validation evidence. Windows and enterprise service combinations remain explicitly unverified; see VALIDATION.md.
+
 # 1.6.0 — 2026-10-09
 
 - Isolate SQL Server/PostgreSQL database collection; preserve failed and unreported archive/Git scopes with finalized hashed manifests and partial status.

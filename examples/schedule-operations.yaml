@@ -1,0 +1,53 @@
+sources:
+  - type: sql
+    host: sql-east
+    instance: PRIMARY
+    timezone: America/New_York
+    path: /srv/configbackup/current/sql
+    require_manifest: true
+    enabled: true
+  - type: postgresql
+    host: pg-west
+    timezone: America/Los_Angeles
+    path: /srv/configbackup/current/pg
+    require_manifest: true
+    enabled: true
+analysis:
+  # Set as_of when repeating an offline analysis to obtain identical results.
+  as_of: '2026-10-09T12:00:00Z'
+  minimum_success_samples: 10
+  recent_days: 7
+  baseline_days: 60
+  regression_ratio: 1.5
+  early_tolerance_minutes: 5
+  match_window_minutes: 60
+  late_after_minutes: 5
+  watchdogs: ['*RestartWorker*']
+  watchdog_max_silence_minutes: {'*RestartWorker*': 15}
+  exclude_from_load: []
+  job_resources:
+    '*NightlyLoad*': [storage:shared-san]
+    '*IndexMaintenance*': [storage:shared-san]
+  resource_capacity: {storage:shared-san: 1}
+  resource_weights:
+    storage:shared-san: {'*NightlyLoad*': 1, '*IndexMaintenance*': 1}
+  dependencies:
+    - job: '*PublishReport*'
+      requires: ['*NightlyLoad*']
+      max_age_hours: 24
+  deadlines:
+    '*PublishReport*': {time: '07:00', day_offset: 0}
+  history_coverage: {} # Never assert complete unless your execution feed proves it.
+  what_if:
+    - name: Move index maintenance two hours later
+      shifts_minutes: {'*IndexMaintenance*': 120}
+reports:
+  daily: {enabled: true, exclude: ['*RestartWorker*']}
+  resource-conflicts: {enabled: true, exclude: []}
+  execution-analysis: {enabled: true, exclude: ['*RestartWorker*']}
+  runtime-trends: {enabled: true}
+  dependencies: {enabled: true}
+  deadlines: {enabled: true}
+  watchdogs: {enabled: true}
+  what-if: {enabled: true}
+  dashboard: {enabled: true}

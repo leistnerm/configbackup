@@ -1,6 +1,6 @@
-# ConfigBackup 1.6.0
+# ConfigBackup 2.0.0
 
-Read [the 1.6.0 migration and safety notes](docs/release-1.6.0.md) before upgrading. The engine and collectors must be upgraded together. See [validation evidence](VALIDATION.md) for tested and unverified behavior.
+Read [the 2.0.0 migration and safety notes](docs/release-2.0.0.md) before upgrading. The engine and collectors must be upgraded together. See [validation evidence](VALIDATION.md) for tested and unverified behavior.
 
 # ConfigBackup
 
@@ -9,6 +9,11 @@ ConfigBackup is a Python 3 utility for preserving configuration files, generated
 It is designed to run once and exit, making it suitable for **Windows Task Scheduler**, **cron**, or a **systemd timer**. It does not contain its own scheduler and does not connect to SQL Server or any other database directly. External collector scripts can do that work and ConfigBackup can archive their output.
 
 ## Key features
+
+- Independent per-database/section certification: failed output preserves prior archive/Git snapshots; successful siblings continue.
+- Optional health monitoring, numeric and selected raw runtime history, offline operations dashboard, HTML/text email and webhook alerts.
+- Guided configuration editor, task/section switches, token-free startup launchers and audited database read-access script generation.
+- Host storage, firmware/kernel, selected registry/RSoP, firewall/share inventory and optional SMART/network/process observations.
 
 - Windows, Linux and macOS support for the core engine; collector/service coverage varies (see VALIDATION.md).
 - Individual files, directories, and recursive glob patterns (`**`).
@@ -38,6 +43,14 @@ It is designed to run once and exit, making it suitable for **Windows Task Sched
 - Dry-run, validation, resolved-config display, and prune-only modes.
 - Atomic file copies and a single-instance lock.
 - JSON state and per-run manifests for auditing.
+
+## Get started with 2.0
+
+```sh
+python configure.py --config configbackup.yaml
+```
+
+Read [operations and email](docs/operations.md), [host coverage](docs/host-coverage.md), [launcher/authentication setup](docs/configuration-tools.md), and [read-only database access](docs/read-only-access.md). Runtime data stays outside certified configuration/Git by default. [VALIDATION.md](VALIDATION.md) records actual tests and remaining platform limits.
 
 ## Requirements
 

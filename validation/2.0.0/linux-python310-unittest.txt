@@ -1,0 +1,55 @@
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv
+
+[notice] A new release of pip is available: 23.0.1 -> 26.2.1
+[notice] To update, run: pip install --upgrade pip
+..................................................................................................................................
+----------------------------------------------------------------------
+Ran 130 tests in 1.268s
+
+OK
+{
+  "status": "passed",
+  "checks": [
+    "real nft rule collection",
+    "packet counters changed while certified policy stayed byte-identical"
+  ],
+  "other_scopes": [
+    {
+      "path": "firewall/nftables",
+      "status": "complete",
+      "error": ""
+    },
+    {
+      "path": "firewall/iptables-ipv4",
+      "status": "complete",
+      "error": ""
+    },
+    {
+      "path": "firewall/iptables-ipv6",
+      "status": "complete",
+      "error": ""
+    },
+    {
+      "path": "firewall/definitions",
+      "status": "complete",
+      "error": ""
+    },
+    {
+      "path": "firewall/firewalld-effective",
+      "status": "not_applicable",
+      "error": "firewall-cmd unavailable; this inventory could not be determined"
+    },
+    {
+      "path": "firewall/firewalld-permanent",
+      "status": "not_applicable",
+      "error": "firewall-cmd unavailable; this inventory could not be determined"
+    },
+    {
+      "path": "firewall/ufw-effective",
+      "status": "not_applicable",
+      "error": "ufw unavailable; this inventory could not be determined"
+    }
+  ],
+  "cleanup": "passed"
+}
+PASS: live Linux socket/process collection, independent share scopes

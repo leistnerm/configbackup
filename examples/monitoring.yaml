@@ -1,0 +1,167 @@
+# Standalone: python monitoring.py --config examples/monitoring.yaml --output /srv/configbackup-health --no-send
+# Or copy the monitoring mapping into your main backup YAML. It runs after Git/retention.
+monitoring:
+  enabled: true
+  required: false
+  host: backup-host
+  history_days: 90
+  stale_after_minutes: 120
+  consecutive: 2
+  cooldown_minutes: 360
+  default_rules: true
+  trend_minimum_samples: 3
+  trend_minimum_hours: 6
+  sources:
+    - path: /srv/configbackup-staging/sql/telemetry/health.json
+      host: sql-host
+      instance: PRIMARY
+      enabled: true
+    - path: /srv/configbackup-staging/pg/telemetry/**/health.json
+      host: pg-host
+      enabled: true
+    - path: /srv/configbackup-staging/pg/telemetry/cluster-health.json
+      host: pg-host
+      enabled: true
+    - path: /srv/configbackup-staging/system/telemetry/storage/health.json
+      host: backup-host
+      enabled: true
+    - path: /srv/configbackup-staging/system/telemetry/drives/health.json
+      host: backup-host
+      enabled: true
+  paths:
+    - path: /srv/backup-volume
+      require_mount: true
+      enabled: false  # Enable after changing to a real mount on THIS host.
+  schedule_reports:
+    - path: /srv/configbackup-schedules
+      enabled: true
+  maintenance:
+    - timezone: America/New_York
+      weekdays: [6]  # Monday=0; Sunday=6
+      start_time: '02:00'
+      end_time: '03:00'
+      where: {host: 'sql-*'}
+  # Examples are intentionally disabled until tuned for the workload.
+  rules:
+    - id: sql-page-density
+      enabled: false
+      metric: sqlserver.index.density_percent
+      op: lt
+      warning: 70
+      critical: 50
+      clear: 75
+      minimum: {pages_count: 1000, reads_count: 100}
+      message: 'Inspect fill factor and workload; this is not an instruction to rebuild.'
+    - id: sql-fragmentation
+      enabled: false
+      metric: sqlserver.index.fragmentation_percent
+      op: gt
+      warning: 30
+      critical: 60
+      clear: 20
+      minimum: {pages_count: 1000, reads_count: 100}
+    - id: sql-columnstore-deleted
+      enabled: false
+      metric: sqlserver.columnstore.deleted_percent
+      op: gt
+      warning: 20
+      critical: 40
+      minimum: {rows_count: 100000}
+    - id: sql-statistics-modified
+      enabled: false
+      metric: sqlserver.statistics.modified_percent
+      warning: 20
+      critical: 50
+      minimum: {rows_count: 10000}
+    - id: sql-full-backup-age
+      enabled: false
+      metric: sqlserver.backups.full_age_hours
+      warning: 30
+      critical: 54
+    - id: sql-missing-full-backup
+      enabled: false
+      metric: sqlserver.backups.missing_full_count
+      warning: 0
+      critical: 0
+    - id: sql-log-backup-age
+      enabled: false
+      metric: sqlserver.backups.log_age_hours
+      where: {recovery_model: FULL}
+      warning: 1
+      critical: 4
+    - id: sql-checkdb-age
+      enabled: false
+      metric: sqlserver.integrity.check_age_hours
+      warning: 192
+      critical: 360
+    - id: pg-dead-tuples
+      enabled: false
+      metric: postgresql.table.dead_rows_percent
+      warning: 20
+      critical: 40
+      minimum: {live_rows_count: 10000}
+    - id: pg-free-space-in-table
+      enabled: false
+      metric: postgresql.bloat.approx_free_percent
+      warning: 40
+      critical: 70
+      minimum: {size_bytes: 104857600}
+      message: 'Free table space is reusable; review growth and vacuum before maintenance.'
+  notifications:
+    enabled: false  # Preview with --no-send; configure recipients before enabling.
+    channels:
+      - id: email
+        enabled: true
+        type: smtp
+        host: smtp.example.invalid
+        port: 587
+        tls: starttls
+        username_env: CONFIGBACKUP_SMTP_USER
+        password_env: CONFIGBACKUP_SMTP_PASSWORD
+        from: configbackup@example.invalid
+        to: [operator@example.invalid]
+        html: true
+        sections:
+          alerts: {enabled: true}
+          capacity: {enabled: true}
+          freshness: {enabled: true}
+          schedules: {enabled: true}
+          recovery: {enabled: true}
+          changes: {enabled: true}
+        max_rows: 30
+        max_html_bytes: 100000
+        immediate: true
+        digest: true
+        digest_hours: 24
+      - id: ntfy
+        enabled: false
+        type: ntfy
+        url_env: CONFIGBACKUP_NTFY_URL
+        token_env: CONFIGBACKUP_NTFY_TOKEN
+      - id: webhook
+        enabled: false
+        type: webhook
+        url_env: CONFIGBACKUP_WEBHOOK_URL
+        token_env: CONFIGBACKUP_WEBHOOK_TOKEN
+      - id: external-heartbeat
+        enabled: false
+        type: heartbeat
+        url_env: CONFIGBACKUP_HEARTBEAT_URL
+        # Generic JSON POST with final run/monitor status, not a provider-specific API.
+  # Optional raw runtime snapshots. These never use Git and have separate retention.
+  runtime_snapshots:
+    - id: system-runtime
+      enabled: false
+      source: /srv/configbackup-staging/system/telemetry
+      include: ['network/*', 'drives/*', 'drives/raw/*', 'storage/*']
+      exclude: []
+      interval_minutes: 60
+      keep_days: 14
+      max_file_bytes: 52428800
+      max_snapshot_bytes: 209715200
+    - id: sql-runtime
+      enabled: false
+      source: /srv/configbackup-staging/sql/telemetry
+      include: ['health.json', 'agent/*']
+      interval_minutes: 60
+      keep_days: 30

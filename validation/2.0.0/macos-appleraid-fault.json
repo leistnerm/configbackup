@@ -1,0 +1,88 @@
+{
+  "status": "passed",
+  "raid_scope": "complete",
+  "changed_certified_files": [],
+  "lab_name": "CBLab-96bd32d29d24",
+  "images": [
+    "member0.img",
+    "member1.img"
+  ],
+  "degraded_test": {
+    "status": "passed",
+    "checks": [
+      "member image detached and deleted",
+      "RAID UUID retained",
+      "both member UUIDs retained",
+      "surviving file readable",
+      "degraded health metric captured",
+      "degraded alert opened locally; no notification sent"
+    ],
+    "health": {
+      "set_uuid": "3BC29AEF-53E7-45F6-9E8D-C383CD1FB59C",
+      "name": "CBLab-96bd32d29d24",
+      "state": "Degraded",
+      "degraded_count": 1,
+      "offline_count": 0,
+      "missing_members_count": 1,
+      "members": [
+        {
+          "AppleRAIDMemberUUID": "7FBE891F-60F7-4B39-B521-71984D3A5EDB",
+          "BSD Name": "disk4s1",
+          "MemberStatus": "Online"
+        },
+        {
+          "AppleRAIDMemberUUID": "FF170523-94AE-441A-8E30-DAF820504A95"
+        }
+      ]
+    },
+    "transitions": [
+      {
+        "set_uuid": "3BC29AEF-53E7-45F6-9E8D-C383CD1FB59C",
+        "name": "CBLab-96bd32d29d24",
+        "state": "Offline",
+        "degraded_count": null,
+        "offline_count": 1,
+        "missing_members_count": 1,
+        "members": [
+          {
+            "AppleRAIDMemberUUID": "7FBE891F-60F7-4B39-B521-71984D3A5EDB",
+            "BSD Name": "disk4s1",
+            "MemberStatus": "Online"
+          },
+          {
+            "AppleRAIDMemberUUID": "FF170523-94AE-441A-8E30-DAF820504A95"
+          }
+        ]
+      },
+      {
+        "set_uuid": "3BC29AEF-53E7-45F6-9E8D-C383CD1FB59C",
+        "name": "CBLab-96bd32d29d24",
+        "state": "Degraded",
+        "degraded_count": 1,
+        "offline_count": 0,
+        "missing_members_count": 1,
+        "members": [
+          {
+            "AppleRAIDMemberUUID": "7FBE891F-60F7-4B39-B521-71984D3A5EDB",
+            "BSD Name": "disk4s1",
+            "MemberStatus": "Online"
+          },
+          {
+            "AppleRAIDMemberUUID": "FF170523-94AE-441A-8E30-DAF820504A95"
+          }
+        ]
+      }
+    ]
+  },
+  "cleanup": [
+    {
+      "image": "member1.img",
+      "detached": true,
+      "deleted_for_test": true
+    },
+    {
+      "image": "member0.img",
+      "detached": true
+    }
+  ]
+}

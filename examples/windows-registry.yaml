@@ -1,0 +1,20 @@
+# python configure.py --kind registry --config examples/windows-registry.yaml
+# python collectors/system/collect_system.py --output C:\ConfigBackupStaging\system --registry-config examples/windows-registry.yaml --include-rsop
+include_defaults: true
+# Built-ins include HKLM/HKCU Run and RunOnce, both registry views,
+# service startup/recovery, RDP, SCHANNEL, update and selected policies.
+# Use task.sections.registry/<id>: {enabled: false} to disable a built-in.
+registry:
+  - id: example-application
+    enabled: false
+    path: 'HKLM\SOFTWARE\ExampleVendor\ExampleApplication'
+    view: '64'
+    recursive: false
+    values: [InstallPath, ServerName, Mode]
+  - id: example-application-32
+    enabled: false
+    path: 'HKLM\SOFTWARE\ExampleVendor\ExampleApplication'
+    view: '32'
+    recursive: true
+    # Omit values to read every value under this explicitly selected key.
+    # An empty list captures key existence only; [''] selects its default value.

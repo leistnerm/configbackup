@@ -6,6 +6,7 @@ ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT))
 import configbackup as cb
 from completeness import Coverage
+from collectors.common.canonicalize import convert
 from collectors.common.compare_snapshots import audit
 
 def main():
@@ -36,8 +37,11 @@ def main():
             return target
         first=collect('first');second=collect('second')
         diff=audit(first,second)
-        significant=[x for x in diff['changed'] if x!='collection-manifest.json']
+        significant=[x for x in diff['changed'] if x!='collection-manifest.json' and not x.startswith('telemetry/')]
         assert not significant,significant
+        assert not diff['added'] and not diff['removed'],diff
+        assert Coverage(first).files==Coverage(second).files
+        assert all((first/name).read_bytes()==(second/name).read_bytes() or convert(first/name)==convert(second/name) for name in Coverage(first).files)
         config={'backup':{'root':str(args.output/'archive')},'git':{'repository':str(args.output/'git')},'options':{'log_level':'CRITICAL'},
                 'deletion':{'missing_runs':1},'tasks':[{'name':'pg','type':'directory','source':str(first),'destination':'pg','storage':'both','collection_manifest':True,'git_canonicalize':True}]}
         def archive(source):

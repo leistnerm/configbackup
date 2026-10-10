@@ -1,0 +1,5 @@
+-- Run in EACH selected database as an administrator. Review every returned row.
+SELECT nspname AS schema_with_create FROM pg_namespace WHERE has_schema_privilege('configbackup_reader',oid,'CREATE');
+SELECT n.nspname,c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname<>'information_schema' AND (has_table_privilege('configbackup_reader',c.oid,'INSERT') OR has_table_privilege('configbackup_reader',c.oid,'UPDATE') OR has_table_privilege('configbackup_reader',c.oid,'DELETE') OR has_table_privilege('configbackup_reader',c.oid,'TRUNCATE'));
+SELECT n.nspname,p.proname,pg_get_function_identity_arguments(p.oid) AS arguments FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND p.prosecdef AND has_function_privilege('configbackup_reader',p.oid,'EXECUTE');
+-- PostgreSQL has no per-user DENY overriding PUBLIC. Do not revoke PUBLIC privileges blindly; review application/service requirements first.

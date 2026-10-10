@@ -1,4 +1,4 @@
-> **1.6.0:** [Migration, changed behavior, new options, and limitations](release-1.6.0.md) supersede older descriptions below, especially collector failure handling, telemetry paths, and time zones.
+> **2.0.0:** Read [current release notes](release-2.0.0.md) and the [1.6 safety migration](release-1.6.0.md). New profiles, telemetry paths and section-level preservation supersede older descriptions below.
 
 # PostgreSQL collector
 
@@ -297,3 +297,7 @@ This collector contains configuration/schema definitions, not database table dat
 Catalog query row arrays and CSV inventories are now sorted canonically before writing, even when PostgreSQL returns otherwise equivalent rows in different orders. Native `pg_dump`/`pg_dumpall` output is left in PostgreSQL's own dependency-safe ordering; the existing normalization removes only known volatile banner timestamps and the collector uses a fixed `--restrict-key` when supported.
 
 To optionally export recent `pg_cron` start/end/status data without log messages or raw command outputs, add `--include-scheduler-history`. The resulting `pg-cron-runs.csv` is intentionally volatile; exclude it from Git if you want only configuration diffs. The new offline analyzer can derive median/P95 durations from that file.
+
+## 2.0 additions
+
+See [read-only-access.md](read-only-access.md) and [release notes](release-2.0.0.md) for new options, tested coverage and limitations.

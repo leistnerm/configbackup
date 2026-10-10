@@ -17,13 +17,21 @@ import math
 import re
 import statistics
 import sys
+import contextlib
+import shutil
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
 import yaml
 
-VERSION = '1.6.0'
+VERSION = '2.0.0'
+sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+from completeness import Coverage, MANIFEST
+from schedule_insights import analyze as analyze_insights, success as execution_success
+REPORT_SETTINGS = {}
 
 from zoneinfo import ZoneInfo
 SOURCE_ZONE = ZoneInfo('UTC')
@@ -47,6 +55,7 @@ def read_json(path: Path) -> Any:
 
 
 def write_csv(path: Path, rows: list[dict[str, Any]], columns: list[str]) -> None:
+    if (REPORT_SETTINGS.get(path.stem) or {}).get('enabled', True) is False: return
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('w', encoding='utf-8', newline='') as stream:
         writer = csv.DictWriter(stream, fieldnames=columns, extrasaction='ignore', lineterminator='\n')
@@ -121,6 +130,7 @@ class Job:
     host: str = ''
     timezone: str = 'UTC'
     observed: list = field(default_factory=list)
+    heartbeats: list = field(default_factory=list)
 
     def duration(self) -> float | None:
         if self.override_duration is not None:
@@ -416,7 +426,7 @@ def load_sql(path: Path, start: dt.date, days: int, server: str) -> tuple[list[J
     history:dict[str,list[float]]={}
     for row in (read_csv(path/'telemetry'/'agent'/'job-runs.csv') or read_csv(root/'job-runs.csv')):
         if row.get('step_id','0') != '0':continue
-        if row.get('run_status') not in ('1','0','2','3'):continue
+        if row.get('run_status') != '1':continue
         name=row.get('job_name','')
         history.setdefault(name,[]).append(sql_duration_minutes(row.get('run_duration')))
     lookup={row.get('name'):row for row in specs if row.get('name')}
@@ -442,7 +452,7 @@ def load_postgres(path: Path, start: dt.date, days: int, server: str) -> tuple[l
         runs:dict[str,list[float]]={}
         for row in (read_csv(path/'telemetry'/db/'pg-cron-runs.csv') or read_csv(sched/'pg-cron-runs.csv')):
             started=parse_dt(row.get('start_time'));ended=parse_dt(row.get('end_time'))
-            if started and ended and ended>=started:
+            if started and ended and ended>=started and execution_success('pg_cron',row.get('status')):
                 runs.setdefault(row.get('jobid',''),[]).append((ended-started).total_seconds()/60)
         for row in read_csv(sched/'pg-cron-jobs.csv'):
             if row.get('active','true').lower() in ('false','0'):continue
@@ -460,7 +470,7 @@ def load_postgres(path: Path, start: dt.date, days: int, server: str) -> tuple[l
             events,cadence,warning=expand_pgagent(spec,selected,start,days)
             key=f"pgagent:{server}:{db}:{job.get('jobid',spec.get('jscjobid'))}"
             durations=[float(r['duration_seconds'])/60 for r in read_csv(path/'telemetry'/db/'pgagent-runs.csv')
-                       if r.get('jlgjobid')==spec.get('jscjobid') and r.get('duration_seconds')]
+                       if r.get('jlgjobid')==spec.get('jscjobid') and r.get('duration_seconds') and execution_success('pgagent',r.get('jlgstatus'))]
             jobs.append(Job(key,'pgagent',job.get('jobname',key),cadence,spec.get('jscname',''),lambda s,d,e=events:e,durations,warning))
             if warning:warnings.append(key+': '+warning)
     return jobs,warnings
@@ -591,7 +601,7 @@ def render_dashboard(output: Path, start: dt.date, timeline: list[dict[str, Any]
     first_end = dt.datetime.combine(start, dt.time.min) + dt.timedelta(days=1)
     today = [row for row in timeline if parse_dt(row['start']) < first_end]
     files = ['jobs', 'timeline', 'today', 'daily', 'weekly', 'monthly', 'overlaps', 'exclusions', 'warnings', 'starts-by-hour']
-    links = ' '.join(f'<a href="{name}.csv">{name}.csv</a>' for name in files)
+    links = ' '.join(f'<a href="{name}.csv">{name}.csv</a>' for name in files if (REPORT_SETTINGS.get(name) or {}).get('enabled',True))
     doc = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>ConfigBackup schedules</title>
 <style>body{font:14px/1.5 system-ui,sans-serif;max-width:1400px;margin:25px auto;padding:0 20px;color:#18263c}
 section{margin:25px 0}table{border-collapse:collapse;width:100%;font-size:13px}td,th{text-align:left;border-bottom:1px solid #ddd;padding:7px;vertical-align:top}
@@ -645,6 +655,8 @@ def load_observations(path,job):
             if date:
                 rows.append({'start':at(date,sql_clock(r.get('run_time'))).isoformat(),
                              'minutes':sql_duration_minutes(r.get('run_duration')), 'status':r.get('run_status','')})
+        for r in read_csv(path/'telemetry'/'agent'/'running-jobs.csv'):
+            if r.get('job_name')==job.name:rows.append({'start':r.get('start_time') or r.get('start'),'status':'running'})
     elif job.source in ('pg_cron','pgagent'):
         for db in (path/'databases').glob('*'):
             if f':{db.name}:' not in job.key:continue
@@ -665,6 +677,8 @@ def load_observations(path,job):
         begin=observation_time(r.get('start'),job.timezone)
         end=observation_time(r.get('end'),job.timezone)
         if begin and 'minutes' in r:end=begin+dt.timedelta(minutes=float(r['minutes']))
+        if begin and not end and str(r.get('status','')).casefold() in ('running','r','4'):
+            result.append({**r,'start':begin.isoformat(),'end':'','job_id':job.key,'host':job.host,'duration_minutes':None})
         if begin and end and end>=begin:
             result.append({**r,'start':begin.isoformat(),'end':end.isoformat(),'job_id':job.key,'host':job.host,
                            'duration_minutes':(end-begin).total_seconds()/60})
@@ -709,7 +723,7 @@ def workload_reports(output,timeline,jobs,settings,reports,warnings):
               ['host','job_id','start','end','duration_minutes','status','scheduled_start','cpu_seconds','logical_reads','physical_reads','peak_memory_mb'])
     observed_load=[]
     for row in facts:
-        if not allowed(row['job_id'],'observed-concurrency'):continue
+        if not row.get('end') or not allowed(row['job_id'],'observed-concurrency'):continue
         row=dict(row)
         duration=row['duration_minutes']*60
         row['cpu_cores']=float(row['cpu_seconds'])/duration if row.get('cpu_seconds') and duration else None
@@ -758,8 +772,35 @@ def workload_reports(output,timeline,jobs,settings,reports,warnings):
     write_csv(output/'warnings.csv',[{'message':w} for w in sorted(set(warnings))],['message'])
 
 
+@contextlib.contextmanager
+def certified_source(path, source, warnings):
+    if not (path / MANIFEST).is_file():
+        if source.get('require_manifest',False):
+            raise ValueError('Source requires a collection manifest: ' + str(path))
+        warnings.append(str(path) + ': legacy source has no completeness manifest; certification/freshness unknown')
+        yield path
+        return
+    with tempfile.TemporaryDirectory(prefix='configbackup-report-') as folder:
+        coverage=Coverage(path,settings=source.get("sections"))
+        root=coverage.seal(folder)
+        for entry in coverage.sections:
+            if entry['status']!='complete':warnings.append(str(path)+': section '+entry['path']+' '+entry['status']+'; omitted from report')
+        if coverage.collected_at:
+            warnings.append(str(path)+': certified snapshot collected at '+coverage.collected_at)
+        else: warnings.append(str(path)+': collection timestamp unavailable')
+        if (path/'telemetry').is_dir():
+            # Telemetry is deliberately independent of configuration certification.
+            for item in sorted((path/'telemetry').rglob('*')):
+                if item.is_symlink(): continue
+                if item.is_file():
+                    target=root/item.relative_to(path);target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(item,target)
+        yield root
+
+
 def report(args: argparse.Namespace) -> dict[str,int]:
     cfg=options_from_yaml(Path(args.config) if args.config else None)
+    global REPORT_SETTINGS
+    REPORT_SETTINGS=cfg.get('reports') or {}
     start=dt.date.fromisoformat(args.start) if args.start else dt.date.today()
     days=int(args.days)
     if days<1 or days>366:raise ValueError('--days must be between 1 and 366')
@@ -772,22 +813,28 @@ def report(args: argparse.Namespace) -> dict[str,int]:
     if args.postgresql:sources.append({'type':'postgresql','path':args.postgresql,'host':args.pg_host,'timezone':'UTC'})
     identities=set()
     for source in sources:
+        if source.get('enabled',True) is False:
+            warnings.append('Disabled source: '+str(source.get('host',source.get('path'))));continue
         kind=source['type'];host=source['host'];zone=source['timezone'];path=Path(source['path'])
         source_id=host + ('\\' + str(source['instance']) if source.get('instance') else '')
         if (kind,source_id) in identities:raise ValueError('Duplicate source type/host/instance')
         identities.add((kind,source_id));SOURCE_ZONE=ZoneInfo(zone)
         loaders={'system':[load_windows,load_crontabs,load_systemd,load_launchd], 'sql':[load_sql], 'postgresql':[load_postgres]}
         if kind not in loaders:raise ValueError('Unknown source type '+kind)
-        for loader in loaders[kind]:
-            js,ws=loader(path,start-dt.timedelta(days=1),days+2,*([source_id] if kind!='system' else []))
-            warnings+=ws
-            for job in js:
-                job.host=host;job.timezone=zone
-                if kind=='system':job.key=job.key.replace(':',':'+host+':',1)
-                # Legacy system IDs remain available when using the old CLI.
-                if kind=='system' and args.system and host=='system':job.key=job.key.replace(':system:',':',1)
-                job.observed=load_observations(path,job)
-            all_jobs+=js
+        with certified_source(path,source,warnings) as certified:
+            for loader in loaders[kind]:
+                js,ws=loader(certified,start-dt.timedelta(days=1),days+2,*([source_id] if kind!='system' else []))
+                warnings+=ws
+                for job in js:
+                    job.host=host;job.timezone=zone
+                    if kind=='system':job.key=job.key.replace(':',':'+host+':',1)
+                    # Legacy system IDs remain available when using the old CLI.
+                    if kind=='system' and args.system and host=='system':job.key=job.key.replace(':system:',':',1)
+                    job.observed=load_observations(certified,job)
+                    job.heartbeats=[r for r in read_csv(certified/'telemetry'/'heartbeats.csv') if r.get('job_id')==job.key]
+                    if job.observed:
+                        job.durations=[float(r['duration_minutes']) for r in job.observed if r.get('duration_minutes') is not None and execution_success(job.source,r.get('status'))]
+                all_jobs+=js
     SOURCE_ZONE=ZoneInfo('UTC')
     settings=cfg.get('analysis') or {}
     exclude_load=settings.get('exclude_from_load') or []
@@ -891,8 +938,21 @@ def report(args: argparse.Namespace) -> dict[str,int]:
     workload_reports(output, timeline, distinct, settings, report_config, warnings)
     summary={'jobs':len(distinct),'predicted_occurrences':len(timeline),'overlaps':len(overlaps),'warnings':len(warnings),
              'known_duration_jobs':sum(1 for j in distinct.values() if j.duration() is not None),'start':start.isoformat(),'days':days}
+    def write_insight(path, rows, columns):
+        patterns=excludes(path.stem)
+        rows=[r for r in rows if not any(match_id(str(r.get(k,'')),patterns) for k in ('job_id','first_job_id','second_job_id'))]
+        write_csv(path,rows,columns)
+    if settings.get('enabled',True) is False:
+        for name in ('execution-analysis','runtime-trends','resource-conflicts','dependencies','deadlines','watchdogs','what-if'):
+            REPORT_SETTINGS[name]={**REPORT_SETTINGS.get(name,{}),'enabled':False}
+        insight={'analysis_status':'disabled'}
+    else:
+        insight=analyze_insights(output,timeline,distinct,settings,write_insight,settings.get('as_of') or dt.datetime.now(dt.timezone.utc).isoformat())
+    summary.update(insight)
+    (output/'report-status.json').write_text(json.dumps({'disabled':[name for name,rule in REPORT_SETTINGS.items() if rule.get('enabled',True) is False]},indent=2)+'\n')
     (output/'summary.json').write_text(json.dumps(summary,indent=2,sort_keys=True)+'\n',encoding='utf-8')
-    render_dashboard(output, start, filtered('timeline'), jobs_rows, overlaps, warnings)
+    if (REPORT_SETTINGS.get('dashboard') or {}).get('enabled',True):render_dashboard(output, start, filtered('timeline'), jobs_rows, overlaps, warnings)
+    REPORT_SETTINGS={}
     return summary
 
 
