@@ -25,7 +25,7 @@ python journal_recovery.py --config configbackup.yaml --output private/journal-a
 
 The retention preview uses the engine's retention algorithm and current saved scope evidence. It lists keep/delete/protected files and reasons; no deletion is performed. Missing files are marked. The additional-space estimate budgets staging, a new archive and undo copies, plus recovery staging/copy. Specify realistic input sizes; zero means unknown. Git growth, filesystem overhead, compression, concurrent writers and unbounded external collectors are not modeled. Free space is reported separately for each path and must not be summed across the same volume.
 
-The journal plan is tied to journal metadata and current target hashes and is rechecked under the run lock. Only unchanged-HEAD rollback or committed cleanup can be applied. Changed Git HEAD, corrupt evidence or orphan files produce a blocked report with preservation instructions. No automatic history rewrite or discard-journal action is supplied. Preserve archive, state, repository and journal together for manual reconciliation.
+The journal plan is tied to journal metadata and current target hashes and is rechecked under the run lock. Only unchanged-HEAD rollback or committed cleanup can be applied. Changed Git HEAD, corrupt evidence or orphan files produce a blocked report with preservation instructions. No automatic history rewrite is performed. Preserve archive, state, repository and journal together for manual reconciliation.
 
 ```sh
 python discovery_review.py --config configbackup.yaml --output private/coverage \
@@ -66,3 +66,26 @@ Retained task state records its configured destination. Filesystem-only moves pr
 ## Limits
 
 Remote recovery transport, verified object-lock storage and automatic application restore are not provided.
+
+## Missing PR worktrees and explicit journal reset
+
+PR worktree cleanup happens after state and journal finalization. If a pending
+run's worktree is missing, startup can restore the archive/state before-images
+when the configured local PR branch still matches the journal's recorded commit.
+The missing checkout is recreated by normal Git preparation. No branch is reset.
+Changed/missing branch references, corrupt evidence and inaccessible existing
+worktrees still require review. This avoids silently undoing already published work.
+
+To explicitly abandon an interrupted run instead of undoing it:
+
+```sh
+python journal_recovery.py --config configbackup.yaml --output private/journal-reset --reset --acknowledge-incomplete-run
+```
+
+The command holds the run lock, copies current state files, and moves the journal
+into a unique `transaction-abandoned-*` directory beside the active journal.
+It does not delete recovery evidence, change Git, or repair partially updated
+archive/state files. Rerun collection and check failures and publication status;
+keep the evidence until the results are verified. The acknowledgement is required
+because failed sections on the next run may retain incomplete data from the
+abandoned run. Inspection without `--reset` remains read-only.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run selected ConfigBackup 1.3.0 fixture tests without using a production configuration.
+"""Run selected ConfigBackup 1.3.1 fixture tests without using a production configuration.
 
 Creates a NEW local result folder. All fixture archives/repositories are temporary
 children of that folder. No live databases, policies, tasks, or remotes are used.
@@ -54,9 +54,11 @@ CASES += [('sensitive manifests require new consumer version', 'test_sensitive_c
 CASES += [('parameter sections require separate collection and git approvals', 'test_sensitive_collection.SensitiveCollectionTests.test_parameter_sections_require_separate_collection_and_git_approvals', False), ('parameter failure preserves archive git and allows siblings', 'test_sensitive_collection.SensitiveCollectionTests.test_parameter_failure_preserves_archive_git_and_allows_siblings', True)]
 CASES += [('browser edits existing nested item and preserves unknown fields', 'test_configuration_browser_dependencies.BrowserDependencyTests.test_browser_edits_existing_nested_item_and_preserves_unknown_fields', False), ('sensitive container and argument values are never displayed', 'test_configuration_browser_dependencies.BrowserDependencyTests.test_sensitive_container_and_argument_values_are_never_displayed', False), ('timezone database failure has repair instruction', 'test_configuration_browser_dependencies.BrowserDependencyTests.test_timezone_database_failure_has_repair_instruction', False), ('dependency check identifies missing timezone data', 'test_configuration_browser_dependencies.BrowserDependencyTests.test_dependency_check_identifies_missing_timezone_data', False), ('install is explicit uses current python and supported constraints', 'test_configuration_browser_dependencies.BrowserDependencyTests.test_install_is_explicit_uses_current_python_and_supported_constraints', False)]
 
+CASES += [('missing worktree restores archive without rewriting branch', 'test_missing_pr_worktree_recovery.MissingPrWorktreeTests.test_missing_worktree_restores_archive_without_rewriting_branch', True), ('advanced branch blocks automatic undo but reset preserves evidence', 'test_missing_pr_worktree_recovery.MissingPrWorktreeTests.test_advanced_branch_blocks_automatic_undo_but_reset_preserves_evidence', True), ('corrupt evidence never partially restores', 'test_missing_pr_worktree_recovery.MissingPrWorktreeTests.test_corrupt_evidence_never_partially_restores', True), ('reset copy failure keeps active journal', 'test_missing_pr_worktree_recovery.MissingPrWorktreeTests.test_reset_copy_failure_keeps_active_journal', True), ('existing worktree uses normal rollback', 'test_missing_pr_worktree_recovery.MissingPrWorktreeTests.test_existing_worktree_uses_normal_rollback', True), ('reset requires acknowledgement before loading config', 'test_missing_pr_worktree_recovery.MissingPrWorktreeTests.test_reset_requires_acknowledgement_before_loading_config', True), ('engine keeps pr checkout until journal commit', 'test_missing_pr_worktree_recovery.MissingPrWorktreeTests.test_engine_keeps_pr_checkout_until_journal_commit', True), ('failed git publication retains worktree until journal commit', 'test_missing_pr_worktree_recovery.MissingPrWorktreeTests.test_failed_git_publication_retains_worktree_until_journal_commit', True), ('reset cli preserves corrupt journal and writes report', 'test_missing_pr_worktree_recovery.MissingPrWorktreeTests.test_reset_cli_preserves_corrupt_journal_and_writes_report', True), ('inherit preserves environment and does not mutate parent', 'test_powershell_policy.PowerShellPolicyTests.test_inherit_preserves_environment_and_does_not_mutate_parent', False), ('non windows unchanged and invalid values rejected', 'test_powershell_policy.PowerShellPolicyTests.test_non_windows_unchanged_and_invalid_values_rejected', False), ('launcher policy is before file and inherit is unchanged', 'test_powershell_policy.PowerShellPolicyTests.test_launcher_policy_is_before_file_and_inherit_is_unchanged', False), ('menu edit and cancel', 'test_powershell_policy.PowerShellPolicyTests.test_menu_edit_and_cancel', False), ('task child receives policy', 'test_powershell_policy.PowerShellPolicyTests.test_task_child_receives_policy', False)]
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--release", type=Path, required=True, help="Extracted configbackup-1.3.0 directory")
+    parser.add_argument("--release", type=Path, required=True, help="Extracted configbackup-1.3.1 directory")
     parser.add_argument("--output", type=Path, required=True, help="New local results directory")
     args = parser.parse_args()
     if sys.version_info < (3, 10):
@@ -90,7 +92,7 @@ def main():
     git_templates.mkdir()
     os.environ.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=str(git_config),
                       GIT_TEMPLATE_DIR=str(git_templates), GIT_TERMINAL_PROMPT="0")
-    payload = {"release": "1.3.0", "started_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+    payload = {"release": "1.3.1", "started_at": dt.datetime.now(dt.timezone.utc).isoformat(),
                "platform": platform.platform(), "python": sys.version,
                "test_kind": "synthetic local fixtures; no live Windows or database claim",
                "git_available": bool(shutil.which("git")), "results": []}
@@ -98,8 +100,8 @@ def main():
     fatal = None
     try:
         import configbackup
-        if configbackup.APP_VERSION != "1.3.0":
-            raise ValueError("Expected ConfigBackup 1.3.0")
+        if configbackup.APP_VERSION != "1.3.1":
+            raise ValueError("Expected ConfigBackup 1.3.1")
         import test_snapshot_safety
         for label, method, needs_git in CASES:
             row = {"check": label, "test": method}

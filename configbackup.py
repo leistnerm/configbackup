@@ -39,7 +39,7 @@ except ImportError:  # pragma: no cover
 from completeness import Coverage, MANIFEST
 
 APP_NAME = "ConfigBackup"
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 STATE_VERSION = 1
 PHASES = ["pre_run", "pre_backup", "backup", "post_backup", "post_run"]
 TASK_TYPES = {"execute", "command", "file", "directory", "glob"}
@@ -454,6 +454,11 @@ class ConfigLoader:
         options.setdefault("hash_algorithm", "sha256")
         options.setdefault("stop_on_error", False)
         options.setdefault("log_level", "INFO")
+        from powershell_policy import validate as validate_powershell_policy
+        try:
+            validate_powershell_policy(options.get('powershell_execution_policy', 'inherit'))
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
 
         logging_cfg = cfg.setdefault("logging", {})
         logging_cfg.setdefault("max_bytes", 5_000_000)
@@ -1057,7 +1062,11 @@ class BackupEngine:
         if not self.dry_run:
             journal = Journal(self.internal_root / 'transaction', [self.root, self.git_repo], self.git_repo if self._uses_git else None)
             try:
-                recovered = journal.recover()
+                if self._uses_git and self.git_mode == 'pull_request' and not self.git_repo.exists():
+                    branch = self._format_git_template(str(self.git_cfg.get('branch') or 'configbackup/{hostname}'))
+                    recovered = journal.recover_missing_pr_worktree(self.git_control_repo, branch)
+                else:
+                    recovered = journal.recover()
             except (ValueError, OSError) as exc:
                 raise ConfigError(str(exc)) from exc
             if recovered['status'] != 'clean':
@@ -1159,6 +1168,8 @@ class BackupEngine:
         # Persist a fresh attempt record even when healthy sections were committed.
         self.state.save()
         if self._durable_journal:self._durable_journal.commit();self._durable_journal=None
+        if self._uses_git and self.git_mode == 'pull_request' and not self.dry_run:
+            self._cleanup_git_worktree()
         self._write_run_manifest()
         if not self.dry_run:
             if (self.cfg.get('integrity') or {}).get('enabled',False):
@@ -1995,7 +2006,8 @@ class BackupEngine:
                     self.git_open_pr_url = self._ensure_github_pull_request()
                     self.state.data["publication"]["pr_url"] = self.git_open_pr_url
         finally:
-            if self.git_mode == "pull_request":
+            # The active journal may still need this worktree for recovery.
+            if self.git_mode == "pull_request" and not getattr(self, '_durable_journal', None):
                 self._cleanup_git_worktree()
 
     def _rollback_git_repo(self) -> None:
@@ -2003,7 +2015,8 @@ class BackupEngine:
             return
         if self.git_mode == "pull_request":
             # The automation worktree is isolated from the user's main checkout. Discard it wholesale.
-            self._cleanup_git_worktree()
+            if not getattr(self, '_durable_journal', None):
+                self._cleanup_git_worktree()
             return
         if not (self.git_repo / ".git").exists():
             return
@@ -2242,6 +2255,8 @@ class BackupEngine:
         env = os.environ.copy()
         env.update({str(k): str(v) for k, v in (task.get("environment") or {}).items()})
         env.update(self.variables_for_task(task))
+        from powershell_policy import environment as policy_environment
+        env = policy_environment(self.cfg, env)
         env["CONFIGBACKUP_SECTIONS"] = json.dumps(task.get("sections") or {})
         from sensitive_data import ENVIRONMENT, validate_sections
         env[ENVIRONMENT] = json.dumps(validate_sections(task.get('sensitive_sections', [])))

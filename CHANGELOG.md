@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.1
+
+- Explicit process-scoped PowerShell execution policy in the configurator, collector environments, diagnostics and generated Windows launchers.
+- Setup walkthrough with SSIS, sensitive collection and execution-policy guidance.
+
+- Preserve PR worktrees until journal finalization; recover missing checkouts when the local PR branch is unchanged.
+- Explicit journal reset preserves recovery evidence and current state, with an incomplete-run acknowledgement.
+
 ## 1.3.0
 
 - Browse and edit existing nested configuration, with section/item inventory and preserved custom fields.

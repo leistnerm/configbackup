@@ -356,3 +356,5 @@ See [configuration-tools.md](configuration-tools.md) and [monitoring and invento
 ## Shared connections and readiness 
 
 See [shared connections](shared-connections.md) and the [Windows lab plan](windows-integration-lab.md).
+
+`options.powershell_execution_policy` defaults to `inherit`; choices and precedence are documented in [setup](setup-walkthrough.md#powershell-execution-policy-on-windows). It does not change persistent Windows policy.

@@ -1,3 +1,5 @@
+1.3.1 — Updated application with PowerShell policy configuration and journal recovery fixes.
+
 1.3.0 — Initial release
 
 Local prerequisite checks, optional prerequisite installation, 283 selected application fixtures, 42 GPO fixtures and optional native Windows acceptance. Default safe tests do not change policies or activate native recorders.

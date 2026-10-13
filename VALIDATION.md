@@ -31,3 +31,13 @@ See the individual collector guides for scope and prerequisites. Use a disposabl
 ## Sensitive exports (1.2)
 
 SQL Server login hash exports and PostgreSQL role hash exports were checked against disposable databases for default exclusion, explicit opt-in and repeat determinism. A synthetic SQL certificate/key fixture verifies environment/project/package recovery, current-version filtering, repeat determinism, corrupt-value isolation and missing-key/incomplete-inventory preservation. Mocked PowerShell and archive/Git fixtures verify that failed recovery preserves prior bytes while normal SSIS sections continue. Real Windows SSISDB recovery, protected credential exports and linked-server password recovery remain unverified. See [sensitive collection](docs/sensitive-collection.md).
+
+## 1.3.1 automated checks
+
+The application suite passed all 514 tests on macOS with PowerShell available.
+Linux Python 3.10 passed 512 tests with two PowerShell-dependent tests skipped.
+New tests exercise unchanged/moved PR branches, missing worktrees, corrupted
+journals, explicit reset and evidence-copy failure, PR cleanup ordering on success
+and failure, policy validation/environment propagation, and generated launcher
+arguments. Policy tests simulate Windows environment selection; they do not prove
+native Windows policy enforcement or Group Policy behavior.

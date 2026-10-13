@@ -109,7 +109,8 @@ def task_context(config, path, name):
         env = os.environ.copy()
         env.update({str(k):str(v) for k,v in task.get('environment',{}).items()})
         env.update(engine.variables_for_task(task))
-        return task, env
+        from powershell_policy import environment as policy_environment
+        return task, policy_environment(resolved, env)
     finally:
         for handler in list(engine.logger.handlers):
             handler.close();engine.logger.removeHandler(handler)

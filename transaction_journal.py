@@ -194,7 +194,23 @@ class Journal:
                 if not isinstance(row.get('sha256'),str) or not __import__('re').fullmatch('[0-9a-f]{64}',row['sha256']):raise ValueError('Invalid journal backup digest')
                 saved=self.directory/name
                 if saved.is_symlink() or not saved.is_file() or sha(saved)!=row['sha256']:raise ValueError('Journal backup is missing or corrupt; no recovery performed')
-    def recover(self):
+    def recover_missing_pr_worktree(self, control_repo, branch):
+        """Recover local files only when the missing PR branch has not advanced."""
+        if not self.manifest.exists() or not self.repo or Path(self.repo).exists():
+            return self.recover()
+        data = self.read()
+        if data.get('status') == 'committed':
+            return self.recover()
+        self.validate_pending(data)
+        result = subprocess.run(['git', '-C', str(control_repo), 'rev-parse', '--verify',
+                                 'refs/heads/' + branch], capture_output=True, text=True, timeout=30)
+        if result.returncode or not data.get('head') or result.stdout.strip() != data['head']:
+            raise ValueError('Missing PR worktree has a changed or unavailable branch. '
+                             'Preserve recovery evidence; use journal_recovery.py --reset '
+                             '--acknowledge-incomplete-run to explicitly abandon recovery.')
+        return self.recover(_missing_pr_head=result.stdout.strip())
+
+    def recover(self, *, _missing_pr_head=None):
         if not self.manifest.exists():return {'status':'clean'}
         data=self.read()
         if data.get('schema') not in (1,2) or data.get('repo')!=self.repo or not isinstance(data.get('entries'),list):
@@ -202,11 +218,16 @@ class Journal:
         if data.get('status')=='committed':
             self.data=data;self.cleanup();return {'status':'cleaned_committed'}
         if data.get('status')!='pending':raise ValueError('Unknown transaction state')
-        if head(self.repo)!=data.get('head'):
+        missing_pr = _missing_pr_head is not None
+        if missing_pr and (not self.repo or Path(self.repo).exists()):
+            raise ValueError('PR worktree reappeared; retry recovery')
+        if (_missing_pr_head if missing_pr else head(self.repo))!=data.get('head'):
             raise ValueError('Interrupted transaction has a different Git HEAD; preserve archive, state and journal for manual reconciliation. No commit or file was rolled back.')
         self.validate_pending(data)
         for row in reversed(data['entries']):
             path=self.allowed(row['path'])
+            if missing_pr and path.is_relative_to(Path(self.repo)):
+                continue
             if row['backup'] is None:
                 path.unlink(missing_ok=True)
             else:
@@ -219,7 +240,7 @@ class Journal:
                     os.chmod(tmp,row['mode']);os.replace(tmp,path)
                 finally:Path(tmp).unlink(missing_ok=True)
             if path.parent.exists():fsync_directory(path.parent)
-        if self.repo:
+        if self.repo and not missing_pr:
             args=['reset','--mixed',data['head']] if data['head'] else ['read-tree','--empty']
             result=subprocess.run(['git','-C',self.repo,*args],capture_output=True,timeout=30)
             if result.returncode:raise ValueError('Files recovered; Git index reconciliation requires review')

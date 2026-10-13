@@ -24,12 +24,12 @@ import uuid
 import zipfile
 from zoneinfo import ZoneInfo
 
-KIT_VERSION = "1.3.0"
+KIT_VERSION = "1.3.1"
 RELEASES = {
-    "configbackup-1.3.0.zip": "94be864ff5b49845800217204167c88fc585120043cf694a0f576eac8b9e3517",
-    "configbackup-gpo-test-1.0.0.zip": "ccdcef46cf9803969059fc12d432a57bbaa56d5f247149a8f6ae860ade037a8a"
+    "configbackup-1.3.1.zip": "0525172db5fffe20ec86b0b6311f7b63104f23f1c4e5b50d4e99d0b979459859",
+    "configbackup-gpo-test-1.0.0.zip": "6e4a4919c7f1f6ab6a340dc34f3ff50c9bc99efc6ad87b45cd98da9e5226a973"
 }
-EXPECTED_CHECKS = 283
+EXPECTED_CHECKS = 297
 EXPECTED_GPO_FIXTURES = 42
 WINDOWS_COMPONENTS = ('iis','dns','dhcp','hyperv','certificates','dfs','nps','wef','wsus','adcs')
 WINDOWS_DETAILS = {'iis-extended':'iis','dns-policies':'dns','dhcp-reservation-options':'dhcp','hyperv-network':'hyperv','hyperv-replication':'hyperv'}

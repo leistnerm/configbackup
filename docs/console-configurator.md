@@ -46,3 +46,5 @@ The file selected by `--config` is loaded before the interface opens. The initia
 **Python dependencies** checks installed core editor packages, the optional console package and actual IANA timezone availability. It uses the exact Python executable running the configurator. Select missing/unsupported packages or choose packages to update within supported version constraints, review the command, then type `INSTALL` to run it. Nothing installs merely by checking. Restart the configurator after installation to load updated packages.
 
 A missing timezone database now produces an explicit `tzdata` installation message, rather than suggesting the default UTC timezone is invalid. Linux/macOS system timezone databases are accepted without requiring an unnecessary tzdata package. Missing console dependencies offer installation before falling back to numbered prompts.
+
+The **PowerShell execution policy** menu controls Windows child-process policy and newly generated launchers. See [setup](setup-walkthrough.md#powershell-execution-policy-on-windows). Save changes and regenerate existing launchers.

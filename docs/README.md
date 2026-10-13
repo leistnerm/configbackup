@@ -11,3 +11,5 @@ Start with the [operator guide](operator-guide.md) and [platform limitations](..
 - [Windows acceptance lab](windows-integration-lab.md), [security](../SECURITY.md), [changelog](../CHANGELOG.md).
 
 The [console configurator](console-configurator.md) provides keyboard navigation and a full-screen interface.
+
+For installation, existing configurations, PowerShell policy and SSIS setup, see the [setup walkthrough](setup-walkthrough.md).

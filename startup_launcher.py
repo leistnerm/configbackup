@@ -8,7 +8,10 @@ import shlex
 def ps(value):return "'"+str(value).replace("'","''")+"'"
 
 
-def generate(config,directory,platform_name,python,provider='existing',secrets=(),vault='',account='',mode='backup',task='',report_directory='',history='',shell='powershell.exe',engine_path=None):
+def generate(config,directory,platform_name,python,provider='existing',secrets=(),vault='',account='',mode='backup',task='',report_directory='',history='',shell='powershell.exe',engine_path=None,execution_policy='inherit'):
+    from powershell_policy import validate
+    validate(execution_policy)
+    policy_args = '' if execution_policy == 'inherit' else ' -ExecutionPolicy ' + execution_policy
     if not isinstance(shell,str) or not shell or any(c in shell for c in '\r\n%\"'):raise ValueError('Invalid PowerShell executable path')
     if platform_name not in ('windows','macos','linux'):raise ValueError('Unknown launcher platform')
     if provider not in ('existing','keychain','secret-service','powershell-vault'):raise ValueError('Unknown secret provider')
@@ -46,6 +49,7 @@ def generate(config,directory,platform_name,python,provider='existing',secrets=(
       'Environment variables exist in process memory and can be read by sufficiently privileged processes. Child collectors inherit them.',
       'No scheduler registration, vault creation, credential storage or backup execution was performed by the generator.']
     if platform_name=='windows':
+        guidance.append('PowerShell execution policy for the BAT launcher: '+execution_policy+'. Process only; Group Policy takes precedence. Regenerate the launcher after changing this choice.')
         lines=["$ErrorActionPreference = 'Stop'","Set-PSDebug -Off","$previous = @{}","$result = 1","try {"]
         for item in secrets:
             name=ps(item['env']);secret=ps(item['name'])
@@ -60,7 +64,7 @@ def generate(config,directory,platform_name,python,provider='existing',secrets=(
                   "} catch {", "    [Console]::Error.WriteLine('ConfigBackup startup failed; check paths and vault access without printing credentials.')", "} finally {",
                   "    foreach ($name in $previous.Keys) { [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process') }", "}", "exit $result"]
         files['run-configbackup.ps1']='\n'.join(lines)+'\n'
-        files['run-configbackup.bat']='@echo off\r\nsetlocal DisableDelayedExpansion\r\n'+chr(34)+shell+chr(34)+' -NoLogo -NoProfile -NonInteractive -File "%~dp0run-configbackup.ps1"\r\nexit /b %errorlevel%\r\n'
+        files['run-configbackup.bat']='@echo off\r\nsetlocal DisableDelayedExpansion\r\n'+chr(34)+shell+chr(34)+policy_args+' -NoLogo -NoProfile -NonInteractive -File "%~dp0run-configbackup.ps1"\r\nexit /b %errorlevel%\r\n'
     else:
         q=shlex.quote;lines=['#!/bin/sh','set +x','set -eu','umask 077']
         for item in secrets:

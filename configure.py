@@ -235,7 +235,7 @@ def new_registry(input_fn=input):
           if boolean('Restrict to selected value names',True,input_fn) else {})}]
 
 
-def launcher_wizard(path,input_fn=input):
+def launcher_wizard(path,input_fn=input,execution_policy='inherit'):
     from startup_launcher import generate
     target=choice('Launcher platform',['windows','macos','linux'],input_fn)
     if not target:return
@@ -254,7 +254,7 @@ def launcher_wizard(path,input_fn=input):
     history=ask('Optional runtime capability state directory (blank to disable)',input_fn=input_fn) if mode=='diagnostic' else ''
     shell=ask('PowerShell executable (Windows PowerShell 5.1 or PowerShell 7)','powershell.exe',input_fn) if target=='windows' else 'powershell.exe'
     files=generate(path,ask('Fresh launcher output directory',input_fn=input_fn),target,
-                   ask('Python executable path/name','python' if target=='windows' else 'python3',input_fn),provider,secrets,vault,account,mode,task,reports,history,shell=shell)
+                   ask('Python executable path/name','python' if target=='windows' else 'python3',input_fn),provider,secrets,vault,account,mode,task,reports,history,shell=shell,execution_policy=execution_policy)
     print('Generated: '+', '.join(str(p) for p in files)+'. Read AUTH-SETUP.txt. Configuration edits must be saved separately.')
 
 
@@ -303,6 +303,7 @@ def diagnostic_profile(input_fn=input):
 
 
 def diagnostics_wizard(config,input_fn=input):
+    from powershell_policy import environment as policy_environment
     from database_diagnostics import diagnose,display,write_report
     profiles=config.setdefault('database_diagnostics',[])
     print('Tests use a separate diagnostic profile: match its identity, database filters and section switches to your collector. Custom task wrappers are not run.')
@@ -321,7 +322,7 @@ def diagnostics_wizard(config,input_fn=input):
         if action=='Edit profile':edit_mapping(profiles[index],input_fn)
         elif action=='Remove profile':profiles.pop(index)
         else:
-            result=diagnose(profiles[index],progress=print);display(result)
+            result=diagnose(profiles[index],progress=print,environment=policy_environment(config));display(result)
             path=ask('Optional new JSON report path (blank to keep only on screen)',input_fn=input_fn)
             if path:write_report(result,path);print('Saved diagnostic report: '+path)
 
@@ -369,6 +370,7 @@ def wizard(config,path,kind,input_fn=input):
         if kind=='backup':choices[10:10]=['HTML review reports','Optional collectors and discovery','Collection profiles','Effective preview','Preview changes']
         if kind=='backup':choices.extend(['Saved collection profiles','Performance recording and reports','Recovery readiness targets','Sensitive collection'])
         choices.extend(['Current configuration','Python dependencies'])
+        if kind=='backup':choices.append('PowerShell execution policy')
         action=choice('ConfigBackup configuration editor',choices,input_fn)
         if action in (None,'Quit without saving'):
             if getattr(input_fn,'console_ui',False) and config!=original and not boolean('Discard unsaved configuration changes?',False,input_fn):continue
@@ -376,7 +378,10 @@ def wizard(config,path,kind,input_fn=input):
         try:
             if kind=='backup' and config.get('monitoring') is None:config['monitoring']={}
             monitor=config.setdefault('monitoring',{}) if kind=='backup' else config.get('monitoring',config)
-            if action=='Current configuration':
+            if action=='PowerShell execution policy':
+                from powershell_policy import wizard as policy_wizard
+                policy_wizard(config,input_fn)
+            elif action=='Current configuration':
                 from config_browser import browse
                 browse(config,input_fn)
             elif action=='Python dependencies':
@@ -425,7 +430,7 @@ def wizard(config,path,kind,input_fn=input):
                 from config_editor import semantic_diff
                 print(semantic_diff(original,config))
             elif action=='Registry selections':manage(config.setdefault('registry',[]),'Registry selections',new_registry,input_fn)
-            elif action=='Generate startup launcher':launcher_wizard(path,input_fn)
+            elif action=='Generate startup launcher':launcher_wizard(path,input_fn,(config.get('options') or {}).get('powershell_execution_policy','inherit'))
             elif action=='Generate database access scripts':access_wizard(input_fn)
             elif action=='Database connection tests':diagnostics_wizard(config,input_fn)
             elif action=='Shared connections':shared_connections_wizard(config,path,input_fn)
@@ -557,11 +562,12 @@ def main(argv=None):
         except (ValueError,OSError,ConfigError) as exc:print('Readiness error:',exc);return 2
         return 1 if result['readiness']=='not_ready' else 6 if result['readiness']=='ready_with_warnings' else 0
     if args.diagnose_database:
+        from powershell_policy import environment as policy_environment
         from database_diagnostics import diagnose,display,write_report
         matches=[p for p in config.get('database_diagnostics',[]) if p.get('name')==args.diagnose_database]
         if len(matches)!=1:parser.error('Choose a unique database_diagnostics profile name')
         try:
-            result=diagnose(matches[0],progress=print);display(result)
+            result=diagnose(matches[0],progress=print,environment=policy_environment(config));display(result)
             report(result)
         except (ValueError,OSError) as exc:print('Diagnostic error:',exc);return 2
         return 0 if result['status'] in ('complete','disabled') else 6 if result['status']=='partial' else 1
