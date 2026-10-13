@@ -34,8 +34,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from completeness import publish, section
 from telemetry import utcnow
 from sections import enabled as section_enabled
+from sensitive_data import requested as sensitive_requested
 
-COLLECTOR_VERSION = "1.0.0"
+COLLECTOR_VERSION = "1.1.0"
 
 
 class CollectorError(RuntimeError):
@@ -314,11 +315,13 @@ class PgTools:
 
     def globals_dump(self) -> str:
         help_text = self.help("pg_dumpall")
-        if "--no-role-passwords" not in help_text:
+        include_sensitive = sensitive_requested('cluster/globals.sql')
+        if not include_sensitive and "--no-role-passwords" not in help_text:
             raise CollectorError(
                 "pg_dumpall does not support --no-role-passwords; refusing to create globals.sql because role password hashes could be exposed"
             )
-        args = ["-w", "--globals-only", "--no-role-passwords", "--quote-all-identifiers"]
+        args = ['-w', '--globals-only', '--quote-all-identifiers']
+        if not include_sensitive:args.append('--no-role-passwords')
         if "--restrict-key" in help_text:
             pass  # Preserve the native random safety key; canonicalize only comparison copies.
         args.extend(["--database", self.args.maintenance_db])
@@ -411,8 +414,9 @@ def capture_file(tools, root, relative, failures, label, action, writer=stable_c
         tools.collection_scopes.append(section(root, relative))
         return value
     except Exception as exc:
-        failures.append({'section': label, 'error': str(exc), 'required': 'false'})
-        tools.collection_scopes.append(section(root, relative, 'failed', str(exc)))
+        error = 'Sensitive collection failed; check permissions and source compatibility' if sensitive_requested(relative) else str(exc)
+        failures.append({'section': label, 'error': error, 'required': 'false'})
+        tools.collection_scopes.append(section(root, relative, 'failed', error))
         warn(label + ': query failed; prior snapshot preserved')
         return None
 
@@ -463,8 +467,11 @@ def collect_cluster(tools: PgTools, root: Path, maintenance_db: str, failures: l
     ]
     file_settings = None
     for name, path, label, query, redact in specs:
-        def read(query=query, redact=redact):
+        def read(query=query, redact=redact, path=path):
             rows = tools.psql_rows(maintenance_db, query)
+            if sensitive_requested(path):
+                # Errors remain masked even when values were explicitly requested.
+                return [{**row, **({'error':'[PARSE ERROR: REVIEW SOURCE LOCALLY]'} if row.get('error') else {})} for row in rows]
             if redact == 'settings': return sanitize_settings_rows(rows)
             if redact == 'hba': return sanitize_hba_rows(rows)
             if redact in ('roles', 'db_roles'):

@@ -8,7 +8,8 @@ from pathlib import Path
 import re
 import stat
 import zipfile
-VERSION = '1.0.0'
+VERSION = '1.1.0'
+GPO_VERSION = '1.0.0'
 ROOT = Path(__file__).resolve().parents[1]
 
 def sha(data):
@@ -33,7 +34,7 @@ def archive(output, name, data):
     def write(target):
         with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as z:
             for member, value in sorted(data.items()):
-                info = zipfile.ZipInfo(f'{name}/{member}', date_time=(2026, 10, 12, 0, 0, 0))
+                info = zipfile.ZipInfo(f'{name}/{member}', date_time=(2026, 10, 12 if name == f'configbackup-gpo-test-{GPO_VERSION}' else 13, 0, 0, 0))
                 info.create_system = 3
                 info.external_attr = (stat.S_IFREG | (0o755 if member.endswith('.sh') else 0o644)) << 16
                 z.writestr(info, value, compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
@@ -62,7 +63,7 @@ def main():
     app = archive(output, f'configbackup-{VERSION}', files(ROOT, {'windows-test-kit', 'tools', '.gitignore'}))
     gpo_files = files(ROOT/'tools/gpo-test')
     gpo_files['CHECKSUMS.sha256'] = checksums(gpo_files)
-    gpo = archive(output, f'configbackup-gpo-test-{VERSION}', gpo_files)
+    gpo = archive(output, f'configbackup-gpo-test-{GPO_VERSION}', gpo_files)
     kit = files(ROOT/'windows-test-kit')
     for name in list(kit):
         if name.endswith(('.zip', '.zip.sha256')):

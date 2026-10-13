@@ -29,6 +29,7 @@ def validate_types(config):
         if not isinstance(value,dict):return
         for key,item in value.items():
             label=(path+'.' if path else '')+str(key)
+            if label=='git.sensitive_data':continue  # Validated separately below.
             if key=='sections' and 'channels[' in path and path.endswith(']') and isinstance(item,list):
                 if any(not isinstance(v,str) for v in item):raise ValueError(label+' must contain email section names')
                 continue
@@ -52,3 +53,10 @@ def validate_types(config):
             elif isinstance(item,list):
                 for n,child in enumerate(item):visit(child,label+'['+str(n)+']')
     visit(config)
+    from sensitive_data import validate_git, validate_sections
+    validate_git(config.get('git') or {})
+    if 'sensitive_sections' in (config.get('defaults') or {}):raise ValueError('Sensitive collection cannot be enabled through task defaults')
+    for task in config.get('tasks', []):
+        if 'sensitive_sections' in task:
+            if task.get('type') != 'execute':raise ValueError('sensitive_sections applies only to collector execute tasks')
+            validate_sections(task['sensitive_sections'])

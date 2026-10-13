@@ -43,12 +43,15 @@ def section(root, path, status='complete', error=''):
                 raise ValueError('Collector output must not contain symlinks')
             if item.is_file():
                 files[item.relative_to(root).as_posix()] = digest(item)
-    return {'path': path, 'status': status, 'error': error, 'files': files}
+    from sensitive_data import requested
+    result = {'path': path, 'status': status, 'error': error, 'files': files}
+    if requested(path):result['sensitive'] = True
+    return result
 
 
 def publish(root, sections, finalized=True):
     root = Path(root)
-    payload = {'schema_version': 1, 'run_id': os.environ.get('CONFIGBACKUP_RUN_ID', ''),
+    payload = {'schema_version': 2 if any(s.get('sensitive') is True for s in sections) else 1, 'run_id': os.environ.get('CONFIGBACKUP_RUN_ID', ''),
                'producer': os.environ.get('CONFIGBACKUP_TASK_NAME', ''),
                'finalized': finalized, 'sections': sections, 'collected_at': dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')}
     target = root / MANIFEST
@@ -61,7 +64,7 @@ class Coverage:
     def __init__(self, root, expected_run=None, settings=None, expected_producer=None):
         self.root = Path(root).resolve()
         data = json.loads((self.root / MANIFEST).read_text(encoding='utf-8-sig'))
-        if data.get('schema_version') != 1 or data.get('finalized') is not True:
+        if data.get('schema_version') not in (1, 2) or data.get('finalized') is not True:
             raise ValueError('Missing finalized collection manifest')
         if expected_run is not None and data.get('run_id') != expected_run:
             raise ValueError('Stale collection manifest: run ID does not match')
@@ -77,6 +80,7 @@ class Coverage:
         self.complete = []
         for item in self.sections:
             scope = relative(item['path'])
+            if 'sensitive' in item and type(item['sensitive']) is not bool:raise ValueError('Invalid sensitive section marker')
             if not enabled(scope,settings or {}): item.update(status='disabled',error='Disabled by configuration')
             if any(within(scope.casefold(), other.casefold()) or within(other.casefold(), scope.casefold()) for other in scopes):
                 raise ValueError('Overlapping collection scopes')

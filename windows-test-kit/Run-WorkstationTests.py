@@ -24,12 +24,12 @@ import uuid
 import zipfile
 from zoneinfo import ZoneInfo
 
-KIT_VERSION = "1.0.0"
+KIT_VERSION = "1.1.0"
 RELEASES = {
-    "configbackup-1.0.0.zip": "94be864ff5b49845800217204167c88fc585120043cf694a0f576eac8b9e3517",
+    "configbackup-1.1.0.zip": "94be864ff5b49845800217204167c88fc585120043cf694a0f576eac8b9e3517",
     "configbackup-gpo-test-1.0.0.zip": "ccdcef46cf9803969059fc12d432a57bbaa56d5f247149a8f6ae860ade037a8a"
 }
-EXPECTED_CHECKS = 259
+EXPECTED_CHECKS = 276
 EXPECTED_GPO_FIXTURES = 42
 WINDOWS_COMPONENTS = ('iis','dns','dhcp','hyperv','certificates','dfs','nps','wef','wsus','adcs')
 WINDOWS_DETAILS = {'iis-extended':'iis','dns-policies':'dns','dhcp-reservation-options':'dhcp','hyperv-network':'hyperv','hyperv-replication':'hyperv'}
@@ -390,7 +390,7 @@ def run_suite(kit, output, *, offline_only=False, users=(), execute=command, off
             data["machine"]["test_python_version"] = probe["python"]
         data["prerequisites"].extend(packages)
         git = shutil.which("git")
-        data["prerequisites"].append(dict(name="Git for 17 synthetic checks", status="PASS" if git else "INCOMPLETE", detail=git or "Not on PATH; 17 checks will be NOT RUN."))
+        data["prerequisites"].append(dict(name="Git for 24 synthetic checks", status="PASS" if git else "INCOMPLETE", detail=git or "Not on PATH; 24 checks will be NOT RUN."))
         win = windows_details()
         windows = win["windows"]
         data["prerequisites"].append(dict(name="Windows for live GPO", status="PASS" if windows else "INCOMPLETE", detail=platform.system()))
@@ -406,7 +406,7 @@ def run_suite(kit, output, *, offline_only=False, users=(), execute=command, off
         if not all(row["status"] == "PASS" for row in packages):
             data["guidance"].append("Use an approved Python environment with PyYAML 6.x, ruamel.yaml 0.18.x and IANA tzdata, or rerun with --offer-install. See LAUNCHER-GUIDE.txt for isolated venv/offline-wheel options.")
         if not git:
-            data["guidance"].append("Install/use your approved Git for Windows on PATH and rerun to include all 15 Git-dependent fixtures.")
+            data["guidance"].append("Install/use your approved Git for Windows on PATH and rerun to include all 24 Git-dependent fixtures.")
 
         def stage(name, action):
             data["progress"] = "Running: " + name

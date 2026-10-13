@@ -39,7 +39,7 @@ except ImportError:  # pragma: no cover
 from completeness import Coverage, MANIFEST
 
 APP_NAME = "ConfigBackup"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 STATE_VERSION = 1
 PHASES = ["pre_run", "pre_backup", "backup", "post_backup", "post_run"]
 TASK_TYPES = {"execute", "command", "file", "directory", "glob"}
@@ -1855,10 +1855,19 @@ class BackupEngine:
         storage = str(task.get("storage", "filesystem")).lower()
         statuses: list[str] = []
         size = src.stat().st_size
+        sensitive_scope = task.get('_sensitive_scope')
+        if sensitive_scope and storage in {'git', 'both'}:
+            from sensitive_data import git_approved, check_git_destination
+            if not git_approved(self.git_cfg, task['name'], sensitive_scope):
+                raise RuntimeError('Sensitive section requires separate Git approval; prior scope preserved')
+            check_git_destination(self)
         if storage in {"filesystem", "both"}:
             statuses.append(self._backup_one_file(task, src, logical, source_display=source_display, count_stats=False))
         if storage in {"git", "both"}:
             statuses.append(self._git_backup_one_file(task, src, logical, source_display=source_display, count_stats=False))
+        file_state = self.state.task(task['name'])['files'].get(posix_rel(logical))
+        if file_state is not None:
+            file_state['sensitive_scope'] = sensitive_scope
         if not statuses:
             raise RuntimeError(f"No storage backend selected for task {task['name']}")
         effective_statuses = [x for x in statuses if x != "ignored"]
@@ -1916,8 +1925,17 @@ class BackupEngine:
         from secret_scan import scan_bytes
         config = self.git_cfg.get("secret_scan") or {}
         # PR/push paths always enforce scanning; local-only repositories may opt out.
-        if config.get("enabled") is False and not (self.git_cfg.get("push") or self.git_mode == "pull_request"):
-            return
+        scan_disabled = config.get('enabled') is False and not (self.git_cfg.get('push') or self.git_mode == 'pull_request')
+        from sensitive_data import git_approved, check_git_destination
+        sensitive_files = {}
+        for task in self.cfg['tasks']:
+            if task.get('type') == 'execute':continue
+            for file_state in self.state.task(task['name']).get('files', {}).values():
+                scope = file_state.get('sensitive_scope')
+                if scope and file_state.get('git_path'):
+                    sensitive_files[file_state['git_path']] = (task['name'], scope)
+        if sensitive_files:check_git_destination(self)
+        elif scan_disabled:return
         findings = []
         # Inspect index modes and bytes, even when a worktree file disappeared.
         entries = self._git_command(["ls-files", "--stage", "-z"]).stdout.split("\0")
@@ -1929,7 +1947,11 @@ class BackupEngine:
                 findings.append(name + ": non-regular or unresolved index entry")
                 continue
             blob = subprocess.run(["git", "cat-file", "blob", oid], cwd=self.git_repo, capture_output=True, check=True).stdout
-            findings.extend(scan_bytes(blob, name, config.get("allow_sha256", [])))
+            approved = False
+            if name in sensitive_files:
+                approved = git_approved(self.git_cfg, *sensitive_files[name])
+                if not approved:findings.append(name + ': sensitive section Git approval missing')
+            findings.extend(scan_bytes(blob, name, config.get("allow_sha256", []), allow_sensitive=approved))
         if findings:
             raise RuntimeError("Secret scan blocked commit/push: " + "; ".join(findings[:20]))
 
@@ -2221,6 +2243,8 @@ class BackupEngine:
         env.update({str(k): str(v) for k, v in (task.get("environment") or {}).items()})
         env.update(self.variables_for_task(task))
         env["CONFIGBACKUP_SECTIONS"] = json.dumps(task.get("sections") or {})
+        from sensitive_data import ENVIRONMENT, validate_sections
+        env[ENVIRONMENT] = json.dumps(validate_sections(task.get('sensitive_sections', [])))
         cwd = task.get("working_directory") or None
         if '_database_profile' in task:
             from database_connections import collect
@@ -2248,6 +2272,7 @@ class BackupEngine:
                 timeout=task.get("timeout") or None,
                 shell=False,
                 check=False,
+                **({'umask': 0o077} if os.name != 'nt' and task.get('sensitive_sections') else {}),
             )
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(f"Command timed out after {task.get('timeout')} seconds") from exc
@@ -2324,6 +2349,7 @@ class BackupEngine:
             logical_scope = posix_rel(logical_root / path)
             status = entry['status']
             error = entry.get('error', '')
+            if entry.get('sensitive') and error:error = 'Sensitive section unavailable; prior snapshot preserved'
             if status == 'complete':
                 discovered = [(sealed / name, self._logical_for_source(source / name, source, destination))
                               for name in sorted(entry['files'])
@@ -2340,7 +2366,7 @@ class BackupEngine:
                         scope_start=time.monotonic();scope_bytes=0
                         scope_bytes=sum(p.stat().st_size for p,_ in discovered)
                         if task.get('max_scope_bytes') and scope_bytes>task['max_scope_bytes']:raise RuntimeError('Certified scope exceeds max_scope_bytes; previous snapshot retained')
-                        self._store_discovered({**task, '_complete_scopes': [logical_scope], '_source_identities': {str(sealed / name):str(source / name) for name in entry['files']}}, result, discovered)
+                        self._store_discovered({**task, '_sensitive_scope': path if entry.get('sensitive') else None, '_complete_scopes': [logical_scope], '_source_identities': {str(sealed / name):str(source / name) for name in entry['files']}}, result, discovered)
                         self._retention_scopes[task['name']].append(logical_scope)
                         self._task_has_committed_scopes = True
                     except Exception as exc:

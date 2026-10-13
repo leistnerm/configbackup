@@ -356,13 +356,16 @@ def wizard(config,path,kind,input_fn=input):
         if kind=='backup':choices.insert(5,'Generate startup launcher');choices.insert(6,'Generate database access scripts');choices.insert(7,'Database connection tests');choices.insert(8,'Shared connections');choices.insert(9,'Check setup')
         if kind=='backup':choices.extend(['Recovery files and export','Autodetect and guided setup','Verify and rehearse setup recovery','Discover files from scheduled jobs','Recovery and review workflows'])
         if kind=='backup':choices[10:10]=['HTML review reports','Optional collectors and discovery','Collection profiles','Effective preview','Preview changes']
-        if kind=='backup':choices.extend(['Saved collection profiles','Performance recording and reports','Recovery readiness targets'])
+        if kind=='backup':choices.extend(['Saved collection profiles','Performance recording and reports','Recovery readiness targets','Sensitive collection'])
         action=choice('ConfigBackup configuration editor',choices,input_fn)
         if action in (None,'Quit without saving'):return False
         try:
             if kind=='backup' and config.get('monitoring') is None:config['monitoring']={}
             monitor=config.setdefault('monitoring',{}) if kind=='backup' else config.get('monitoring',config)
-            if action=='Recovery files and export':
+            if action=='Sensitive collection':
+                from sensitive_data import wizard as sensitive_wizard
+                sensitive_wizard(config,input_fn)
+            elif action=='Recovery files and export':
                 from recovery_assets import wizard as recovery_wizard
                 recovery_wizard(config,path,input_fn)
             elif action=='Recovery and review workflows':

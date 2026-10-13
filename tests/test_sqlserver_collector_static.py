@@ -11,7 +11,7 @@ class SqlServerCollectorStaticTests(unittest.TestCase):
     def test_agent_server_is_excluded_from_broad_instance_export(self):
         script = (Path(__file__).resolve().parents[1] / "collectors" / "sqlserver" / "Collect-SqlServerConfiguration.ps1").read_text(encoding="utf-8")
         self.assertIn("$excludes = @('Databases', 'AgentServer', 'AvailabilityGroups', 'SpConfigure')", script)
-        self.assertIn("Verbose         = $true", script)
+        self.assertIn("Verbose         = (-not $IncludeSensitive)", script)
         self.assertIn("Export-DbaInstance failed:", script)
 
     def test_availability_groups_are_conditionally_exported(self):

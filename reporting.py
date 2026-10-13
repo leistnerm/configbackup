@@ -140,6 +140,8 @@ def file_record(path,name,scope,observed,config):
     from completeness import digest
     size=path.stat().st_size
     record={'path':name,'scope':scope,'bytes':size,'sha256':digest(path),'observed_at':observed,'preserved':False}
+    if config.get('_sensitive_section'):
+        record['preview_status']='sensitive_section';return record
     limit=config.get('max_file_bytes',1_000_000)
     if size>limit:record['preview_status']='size_limit';return record
     data=path.read_bytes()
@@ -189,10 +191,14 @@ def capture(spec,config,previous=None):
             if not ok:row['reason']='Collection unavailable; inspect local collector diagnostics';result['status']='partial' if scope['status'] in ('failed','skipped') else result['status']
             result['coverage'].append(row)
             if ok:
-                for path in sorted(scope['files']):result['files'][path]=file_record(sealed/path,path,name,coverage.collected_at,{**config,**spec})
+                for path in sorted(scope['files']):result['files'][path]=file_record(sealed/path,path,name,coverage.collected_at,{**config,**spec,'_sensitive_section':scope.get('sensitive',False)})
             else:
                 for path,record in oldfiles.items():
-                    if within(path,name):result['files'][path]={**record,'preserved':True,'preservation_reason':scope['status']}
+                    if within(path,name):
+                        if scope.get('sensitive'):
+                            record={k:v for k,v in record.items() if k in {'path','scope','bytes','sha256','observed_at'}}
+                            record['preview_status']='sensitive_section'
+                        result['files'][path]={**record,'preserved':True,'preservation_reason':scope['status']}
     declared={s['path'] for s in coverage.sections}
     for path,record in oldfiles.items():
         if not any(within(path,s) for s in declared):

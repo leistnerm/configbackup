@@ -1,6 +1,6 @@
 # Current ConfigBackup documentation
 
-Start with the [operator guide](operator-guide.md) and [platform limitations](../VALIDATION.md). These feature guides describe the initial 1.0.0 release.
+Start with the [operator guide](operator-guide.md) and [platform limitations](../VALIDATION.md). These feature guides describe ConfigBackup 1.1. See [sensitive collection](sensitive-collection.md) for explicit per-section collection and Git approvals.
 
 - [Configuration and menus](configuration-editor.md), [shared database connections](shared-connections.md), [saved profiles and effective settings](integrity-profiles-and-deployment.md#configuration-profiles).
 - [SQL Server](sql-server-collector.md), [PostgreSQL](postgresql-collector.md), [read-only access](read-only-access.md), [service coverage](sql-services.md).

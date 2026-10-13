@@ -5,6 +5,8 @@ import re
 import zipfile
 
 RULES = {
+    'sql-password-hash': rb'(?i)\bpassword\s*=\s*0x[0-9a-f]{16,}',
+    'postgres-password-hash': rb'(?i)(?:SCRAM-SHA-256\$[0-9]+:|\bmd5[0-9a-f]{32}\b)',
     # SQL Unicode literals (N'...') and escaped quotes must not bypass the gate.
     'sql-password-literal': rb"(?i)\b(?:password|pwd)\s*=\s*N?'((?:[^']|''){4,})'",
     'postgres-option-literal': rb"(?i)\b(?:password|sslpassword|ldapbindpasswd|radiussecrets?)\"?\s+'((?:[^']|''){1,})'",
@@ -18,7 +20,7 @@ RULES = {
 }
 
 
-def scan_bytes(data, name, allow_sha256=(), depth=0):
+def scan_bytes(data, name, allow_sha256=(), depth=0, *, allow_sensitive=False):
     if hashlib.sha256(data).hexdigest() in allow_sha256:
         return []
     if depth > 3 or len(data) > 100 * 1024 * 1024:
@@ -32,7 +34,7 @@ def scan_bytes(data, name, allow_sha256=(), depth=0):
             value = match.group(1) if match.lastindex else b''
             if value.lower() in (b'redacted', b'null', b'none', b'false', b'true') or value.startswith((b'${', b'$(', b'@')):
                 continue
-            findings.append(name + ': ' + rule)
+            if not allow_sensitive:findings.append(name + ': ' + rule)
             break
     if data.startswith(b'PK\x03\x04'):
         try:
@@ -41,7 +43,7 @@ def scan_bytes(data, name, allow_sha256=(), depth=0):
                     return findings + [name + ': expanded archive exceeds scan limit']
                 for item in archive.infolist():
                     if not item.is_dir():
-                        findings += scan_bytes(archive.read(item), name + '!' + item.filename, allow_sha256, depth + 1)
+                        findings += scan_bytes(archive.read(item), name + '!' + item.filename, allow_sha256, depth + 1, allow_sensitive=allow_sensitive)
         except (OSError, ValueError, RuntimeError, zipfile.BadZipFile):
             findings.append(name + ': archive could not be scanned')
     return findings

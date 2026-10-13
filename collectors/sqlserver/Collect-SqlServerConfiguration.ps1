@@ -14,7 +14,7 @@
     dbatools instance scripts by default.
 
 .NOTES
-    Collector version: 1.0.0
+    Collector version: 1.1.0
     Requires:
       - PowerShell 5.1+ (PowerShell 7+ recommended)
       - dbatools PowerShell module
@@ -118,9 +118,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'SensitiveCollection.ps1')
 $ProgressPreference = 'SilentlyContinue'
 
-$CollectorVersion = '1.0.0'
+$CollectorVersion = '1.1.0'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Write-CollectorMessage {
@@ -640,7 +641,8 @@ function Export-InstanceConfiguration {
         [Parameter(Mandatory = $true)]$ServerObject,
         [Parameter(Mandatory = $true)][string]$TargetDirectory,
         [string[]]$AdditionalExcludes,
-        [Parameter(Mandatory = $true)][bool]$HadrEnabled
+        [Parameter(Mandatory = $true)][bool]$HadrEnabled,
+        [bool]$IncludeSensitive = $false
     )
 
     [System.IO.Directory]::CreateDirectory($TargetDirectory) | Out-Null
@@ -667,10 +669,10 @@ function Export-InstanceConfiguration {
             Path            = $tempRoot
             Force           = $true
             NoPrefix        = $true
-            ExcludePassword = $true
+            ExcludePassword = (-not $IncludeSensitive)
             Exclude         = $excludes
             EnableException = $true
-            Verbose         = $true
+            Verbose         = (-not $IncludeSensitive)
         }
 
         $files = @()
@@ -681,10 +683,11 @@ function Export-InstanceConfiguration {
                 if ($maxAttempts -gt 1) {
                     Write-CollectorMessage "Export-DbaInstance attempt $attempt of $maxAttempts"
                 }
-                $files = @(Export-DbaInstance @exportArgs)
+                if ($IncludeSensitive) { $files = @(Export-DbaInstance @exportArgs 3>$null 4>$null 5>$null 6>$null) } else { $files = @(Export-DbaInstance @exportArgs) }
                 break
             }
             catch {
+                if ($IncludeSensitive) { throw 'Sensitive instance export failed; verify permissions and compatibility locally' }
                 $transitionDatabase = Get-TransitionDatabaseName -ErrorRecord $_
                 $canRetryTransition = (
                     -not [string]::IsNullOrWhiteSpace($transitionDatabase) -and
@@ -1382,7 +1385,8 @@ $script:IsSqlSysadmin = $false
 $script:ReadOnlyServerVisible = $false
 function Save-CollectionManifest {
     param([bool]$Finalized = $false)
-    $payload = [ordered]@{schema_version=1; collected_at=[DateTime]::UtcNow.ToString('o'); run_id=[string]$env:CONFIGBACKUP_RUN_ID; producer=[string]$env:CONFIGBACKUP_TASK_NAME; finalized=$Finalized; sections=@($script:CollectionSections)}
+    $manifestVersion = if (@($script:CollectionSections | Where-Object { $_['sensitive'] -eq $true }).Count) { 2 } else { 1 }
+    $payload = [ordered]@{schema_version=$manifestVersion; collected_at=[DateTime]::UtcNow.ToString('o'); run_id=[string]$env:CONFIGBACKUP_RUN_ID; producer=[string]$env:CONFIGBACKUP_TASK_NAME; finalized=$Finalized; sections=@($script:CollectionSections)}
     $temp = Join-Path $OutputDirectory 'collection-manifest.json.tmp'
     Write-StableJson -Path $temp -Value $payload -Depth 20
     Move-Item -LiteralPath $temp -Destination (Join-Path $OutputDirectory 'collection-manifest.json') -Force
@@ -1487,10 +1491,10 @@ function Invoke-CollectionSection {
         }
     }
     catch {
-        $status = 'failed'; $errorText = $_.Exception.Message; $files = [ordered]@{}
+        $status = 'failed'; $errorText = if (Test-SensitiveSection $Path) { 'Sensitive collection failed; verify permissions, keys and compatibility locally' } else { $_.Exception.Message }; $files = [ordered]@{}
         Write-CollectorError "Section '$Path' failed; previous archive/Git snapshot will be preserved: $errorText"
     }
-    $script:CollectionSections += [ordered]@{path=$Path;status=$status;error=$errorText;files=$files}
+    $script:CollectionSections += [ordered]@{path=$Path;status=$status;error=$errorText;files=$files;sensitive=(Test-SensitiveSection $Path)}
     Save-CollectionManifest
 }
 
@@ -1633,7 +1637,8 @@ try {
         InstanceExportTransitionRetries = $InstanceExportTransitionRetries
         InstanceExportTransitionDelaySeconds = $InstanceExportTransitionDelaySeconds
         Inventory             = (-not $SkipInventory)
-        PasswordMaterial      = 'excluded'
+        PasswordMaterial      = 'excluded unless explicitly selected per sensitive section'
+        SensitiveSectionsRequested = @($(if ($env:CONFIGBACKUP_SENSITIVE_SECTIONS) { $env:CONFIGBACKUP_SENSITIVE_SECTIONS | ConvertFrom-Json }))
         SqlAgent               = (-not $SkipAgent)
         Ssis                   = (-not $SkipSsis)
         IspacFiles             = (-not $SkipIspac)
@@ -1726,7 +1731,7 @@ try {
                     throw 'Policy Management scripting requires Windows; prior files preserved'
                 } else {
                     $excludeOthers = @($allExportComponents | Where-Object { $_ -ne $component })
-                    Export-InstanceConfiguration -ServerObject $server -TargetDirectory $target -AdditionalExcludes $excludeOthers -HadrEnabled:$hadrEnabled
+                    Export-InstanceConfiguration -ServerObject $server -TargetDirectory $target -AdditionalExcludes $excludeOthers -HadrEnabled:$hadrEnabled -IncludeSensitive:(Test-SensitiveSection $componentPath)
                 }
             }
         }
@@ -1797,6 +1802,19 @@ ORDER BY h.run_date DESC, h.run_time DESC, h.instance_id DESC;
         Write-CollectorError ('SSIS discovery failed: ' + $_.Exception.Message)
       }
     } # SSIS section
+
+    # Independent from normal SSIS metadata/ISPAC capture; failures only freeze
+    # this dedicated recovery scope. No policy/key/role updates are performed.
+    $sensitiveSsisPath = 'instance/sensitive-ssis/environment-variables.csv'
+    if (Test-SensitiveSection $sensitiveSsisPath) {
+        if ($SkipSsis -or -not (Test-SectionEnabled 'instance/ssis')) {
+            $script:CollectionSections += [ordered]@{path=$sensitiveSsisPath;status='disabled';error='SSIS collection disabled';files=@{};sensitive=$true}
+        } else {
+            Invoke-CollectionSection $sensitiveSsisPath {
+                Export-SsisSensitiveEnvironment -ServerObject $server -TargetPath (Join-Path $OutputDirectory $sensitiveSsisPath)
+            }
+        }
+    }
 
     foreach ($db in $databases) {
         $safeName = Get-SafePathSegment -Value $db.Name
@@ -1974,6 +1992,13 @@ ORDER BY h.run_date DESC, h.run_time DESC, h.instance_id DESC;
     Invoke-CollectionSection 'instance/server.json' { }
     Invoke-CollectionSection 'collector.json' { }
     Invoke-CollectionSection 'database-map.csv' { }
+    if ($env:CONFIGBACKUP_SENSITIVE_SECTIONS) {
+        foreach ($requestedScope in @($env:CONFIGBACKUP_SENSITIVE_SECTIONS | ConvertFrom-Json)) {
+            if (-not @($script:CollectionSections | Where-Object { $_.path -ceq $requestedScope }).Count) {
+                $script:CollectionSections += [ordered]@{path=$requestedScope;status='disabled';error='Sensitive section disabled or excluded by collector settings';files=@{};sensitive=$true}
+            }
+        }
+    }
     Save-CollectionManifest -Finalized $true
     if (@($script:CollectionSections | Where-Object { $_.status -in @('failed','skipped') }).Count -gt 0) {
         Write-CollectorError 'SQL Server collection partially failed (exit 6)'

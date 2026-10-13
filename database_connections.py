@@ -20,6 +20,7 @@ def validate_connections(config):
     if not isinstance(values, dict): raise ValueError('connections must be a mapping of names to profiles')
     for name, profile in values.items():
         if not isinstance(name, str) or not name: raise ValueError('Connection names must be nonempty strings')
+        if "sensitive_sections" in profile:raise ValueError("Sensitive sections require explicit collector task approval")
         diagnostics.validate(profile)
 
 
@@ -47,6 +48,7 @@ def prepare(task, config):
     requirements = task.get('required_sections', [])
     if not isinstance(requirements, list) or any(not isinstance(x, str) or not x or x.startswith('/') or '..' in x.split('/') for x in requirements):
         raise ValueError('required_sections must contain relative manifest scope/file patterns')
+    profile['sensitive_sections'] = task.get('sensitive_sections', [])
     task['_database_profile'] = profile
     task['sections'] = profile['sections']
     task['enabled'] = bool(task.get('enabled', True) and profile.get('enabled', True))
@@ -70,6 +72,8 @@ def working_directory(path):
 def environment(profile, env):
     env = dict(env)
     env['CONFIGBACKUP_SECTIONS'] = json.dumps(profile.get('sections', {}))
+    from sensitive_data import ENVIRONMENT, validate_sections
+    env[ENVIRONMENT] = json.dumps(validate_sections(profile.get('sensitive_sections', [])))
     variable = profile.get('password_env')
     if variable:
         if not env.get(variable): raise ValueError('Missing or empty credential environment variable: ' + variable)

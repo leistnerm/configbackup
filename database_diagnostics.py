@@ -34,7 +34,9 @@ ENGINE_FIELDS['postgresql'].update(PG_BOOLS|{'exclude_databases','bloat_tables',
 def validate(profile):
     if not isinstance(profile, dict) or profile.get('engine') not in ENGINE_FIELDS:
         raise ValueError('Diagnostic engine must be sqlserver or postgresql')
-    unknown = set(profile) - COMMON - ENGINE_FIELDS[profile['engine']]
+    from sensitive_data import validate_sections, SQL_SECTIONS, PG_SECTIONS
+    validate_sections(profile.get('sensitive_sections', []), SQL_SECTIONS if profile['engine']=='sqlserver' else PG_SECTIONS)
+    unknown = set(profile) - COMMON - ENGINE_FIELDS[profile['engine']] - {'sensitive_sections'}
     if unknown:
         raise ValueError('Unsupported diagnostic fields: ' + ', '.join(sorted(unknown)) + '. Use password_env, never a password value.')
     if profile.get('access_profile', 'read-only') not in ('read-only', 'full'):
@@ -104,6 +106,7 @@ def sanitize(value, env):
 def process(command, env, timeout, capture=False):
     """Kill the diagnostic process tree on timeout, before removing scratch data."""
     options = {'start_new_session': True} if os.name != 'nt' else {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
+    if os.name != 'nt' and json.loads(env.get('CONFIGBACKUP_SENSITIVE_SECTIONS','[]')):options['umask']=0o077
     with subprocess.Popen(command, env=env, stdin=subprocess.DEVNULL,
                           stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
                           stderr=subprocess.DEVNULL, text=True, **options) as child:
@@ -222,6 +225,7 @@ def diagnose(profile, progress=None, environment=None):
     env = dict(os.environ if environment is None else environment)
     env.pop('CONFIGBACKUP_OUTPUT', None)
     env['CONFIGBACKUP_SECTIONS'] = json.dumps(profile.get('sections', {}))
+    env['CONFIGBACKUP_SENSITIVE_SECTIONS'] = '[]'  # Permission tests never recover secrets.
     env['PGCONNECT_TIMEOUT'] = str(profile.get('connect_timeout', 10))
     result = {'schema_version': 1, 'observed_at': dt.datetime.now(dt.timezone.utc).isoformat(),
               'name': profile.get('name', profile['engine']), 'engine': profile['engine'],

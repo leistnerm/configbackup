@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.0
+
+- Explicit per-section sensitive exports with separate private Git publication approval.
+- Isolated opt-in SSIS environment-value recovery; normal SSIS capture continues after recovery failure.
+- Sensitive manifest classification, hidden HTML value previews and password-hash detection.
+- Guided configuration and synthetic/disposable-database validation scripts.
+
 ## 1.0.0 — Initial release
 
 - Configuration archives and Git snapshots with independent database/section failure preservation, completeness certification and scoped deletion detection.
