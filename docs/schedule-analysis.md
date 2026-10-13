@@ -1,0 +1,193 @@
+> The analyzer reads saved local evidence. See the [review portal](review-portal.md) for interactive timeline/heatmap and analytical detail views; this page describes the current scheduler support and its limits.
+
+# Schedule inventory, timelines, and overlap analysis
+
+This is a **separate, read-only analyzer** built on ConfigBackup collector snapshots. It does **not** connect to databases or change task definitions. Run the system/SQL/PostgreSQL collectors first, then call `collectors/schedule/analyze_schedules.py` on their generated directories.
+
+The goal is to see *what is scheduled*, *when it might run*, *how long it typically runs*, and *which jobs might overlap*. Schedule predictions are not an audit of actual executions.
+
+## Inputs and supported scheduling systems
+
+| System | Source file | Start-time support | Duration history |
+|---|---|---|---|
+| Windows Task Scheduler | `system/scheduling/scheduled-tasks.json` | Daily, weekly, simple monthly, fixed time, ISO-8601 repetition | Optional TaskScheduler/Operational events 100+102 |
+| SQL Server Agent | `sql/instance/agent/schedules.csv`, `schedule-jobs.csv`, `jobs.csv` | Once, every N days, weekly masks, monthly fixed and monthly relative, every N seconds/minutes/hours | Optional `msdb.dbo.sysjobhistory`, step_id=0 |
+| PostgreSQL `pg_cron` | `postgresql/databases/*/schedulers/pg-cron-jobs.csv` | Standard five-field cron expressions | Optional `cron.job_run_details` |
+| Linux system cron | `system/scheduling/cron/` | Five-field cron (system crontab and cron.d), common aliases | None from cron definitions |
+| Linux systemd timers | `system/scheduling/systemd-timers.csv` | Simple `OnCalendar` forms | None; monotonic/event triggers are reported as unknown |
+| PostgreSQL pgAgent | `postgresql/databases/*/schedulers/pgagent/*` | Enabled bitmap calendars with collected exceptions | Optional collected pgAgent runtime history |
+
+Unrecognized schedules, missed-run/catch-up behavior, jitter, event-driven triggers, and scheduler timezone peculiarities are **reported, not guessed**. Systemd's randomized delay may mean an actual start is later than the projected clock start. Named sources require an explicit IANA timezone. Occurrences are converted to UTC with host-local columns; ambiguous/nonexistent DST wall times are omitted with warnings. Legacy --system/--sql/--postgresql inputs use UTC, so use named sources for non-UTC hosts. The default start date remains the analyzer machine's local date, while the report horizon is bounded in UTC.
+
+### Collect runtime history (optional)
+
+Actual durations require execution history, not merely recurrence definitions. New optional collector switches:
+
+**Windows system collector**:
+
+```powershell
+py collectors/system/collect_system.py --output C:\Temp\sys-snapshot --include-task-history --task-history-days 60
+```
+
+The Windows **Task Scheduler Operational log must be enabled and retain suitable 100/102 start/completion events**. The collector matches a task name and execution instance ID; missing/disabled history yields unknown durations. These log events may not be available to unprivileged accounts.
+
+**SQL Server collector**:
+
+```powershell
+pwsh -File collectors/sqlserver/Collect-SqlServerConfiguration.ps1 -SqlInstance SQL01 -IncludeAgentHistory -AgentHistoryDays 60
+```
+
+It exports up to 20,000 recent job-level history entries (`step_id=0`), including `run_duration`, without reading job-step output or credential material. SQL Agent `run_duration` can exceed 24 hours; the analyzer handles that encoding. Older SQL Agent history may have been purged, and only observed completions can inform runtime estimates.
+
+**PostgreSQL collector**:
+
+```bash
+python3 collectors/postgresql/collect_postgresql.py --include-scheduler-history
+```
+
+It reads up to 20,000 recent `pg_cron` run timestamps (60-day lookback) if the extension and permissions allow. It does not export error output or SQL command text from `job_run_details`.
+
+**History is deliberately optional and volatile**: current collectors put it in telemetry/, outside certified configuration/Git snapshots. For legacy layouts or explicit custom directory tasks, Git-only exclusions can additionally keep rolling histories out of commits:
+
+```yaml
+git:
+  ignore:
+    - '**/*.ispac'
+    - '**/job-runs.csv'
+    - '**/scheduled-task-runs.csv'
+    - '**/pg-cron-runs.csv'
+```
+
+Filesystem history can still preserve these files when using `storage: both`. The schedule report itself generally belongs in `storage: filesystem`, not Git, because the reporting horizon shifts daily.
+
+## Run analyzer on existing snapshots
+
+On Windows:
+
+```powershell
+py collectors\schedule\analyze_schedules.py `
+  --system C:\Temp\system-snapshot `
+  --sql C:\Temp\sql-snapshot `
+  --sql-host SQL01 `
+  --config examples\schedule-report.yaml `
+  --output C:\Temp\schedule-report `
+  --days 35
+```
+
+On Linux with PostgreSQL:
+
+```bash
+python3 collectors/schedule/analyze_schedules.py \
+  --system /tmp/system-snapshot \
+  --postgresql /tmp/postgresql-snapshot \
+  --pg-host pg01 \
+  --config examples/schedule-report.yaml \
+  --output /tmp/schedule-report --days 35
+```
+
+To produce a repeatable report on fixed dates for debugging, provide `--start YYYY-MM-DD`. The default is the collector host's local calendar date.
+
+### Integrate with ConfigBackup YAML
+
+See `examples/full-stack-windows-schedule-analysis.yaml`. There are three dependency stages: collect definitions/history → run schedule analyzer → archive the reports. You can add the analyzer task to your existing YAML without changing the backup engine. Use `storage: filesystem` for the rolling reports. If a required collector fails, the dependent report task is skipped, rather than analyzing an incomplete snapshot.
+
+## Output files
+
+| File | Meaning |
+|---|---|
+| `dashboard.html` | Offline browseable summary of today's starts, overlaps, median/P95 durations, limitations |
+| `jobs.csv` | Complete inventory, schedule, recurrence, history sample size, median/P95 duration, exclusions |
+| `today.csv` | All known predicted starts of any cadence in first calendar day |
+| `daily.csv` | Daily recurrence jobs for first day, including every X hours/minutes |
+| `daily-recurring.csv` | Daily recurring jobs expanded over the complete configured horizon |
+| `weekly.csv` | Weekly recurrence occurrences over configured horizon |
+| `monthly.csv` | Monthly recurrence occurrences over configured horizon |
+| `timeline.csv` | All predictable events over configured horizon, sorted chronologically |
+| `starts-by-hour.csv` | Starts per hour, with counts split by known/unknown duration |
+| `overlaps.csv` | Cross-job overlap of **estimated duration windows**, only where duration is known or overridden |
+| `exclusions.csv` | What was excluded and from which report or load analysis |
+| `warnings.csv` | Schedules that couldn't be predicted exactly or weren't supported |
+| `summary.json` | Machine-readable report counts and horizon |
+
+Start/end time columns in timeline are **predictions**. `end_estimated` is blank when historical durations are unavailable. Median runtimes are used for overlap computation. P95 scenarios are also calculated in overlaps-p95.csv and concurrency.csv. They are estimates from observed samples, not worst-case guarantees or overlap probabilities. A watchdog that starts every five minutes but exits immediately upon detecting another instance is a good candidate for exclusion from **load/overlap analysis**, not necessarily from schedule inventory.
+
+## Exclusions, per report only
+
+Create `schedule-report.yaml` (a ready-made example is included):
+
+```yaml
+reports:
+  daily:
+    exclude:
+      - 'windows:*\My Five Minute Restart Task'
+  overlaps:
+    exclude:
+      - 'windows:*\My Five Minute Restart Task'
+  weekly:
+    exclude: []
+  monthly:
+    exclude: []
+  timeline:
+    exclude: []
+```
+
+This **does not remove the job** from `jobs.csv`, from its actual scheduler, or from any other report. Matching uses case-insensitive `*`/`?` patterns over `job_id`. Use `jobs.csv` to discover the exact generated IDs. Examples:
+
+```text
+windows:\Maintenance\Restart Watchdog
+sql_agent:SQL01:Nightly ETL
+pg_cron:PG01:appdb:cleanup
+cron:cron.d/backup:3
+systemd:logrotate.timer
+```
+
+For an execution that *doesn't represent real concurrent load*, such as a single-instance restart/watchdog timer, you can exclude it from load/overlap analysis while keeping its starts in the timeline:
+
+```yaml
+analysis:
+  watchdogs:
+    - 'windows:*\My Five Minute Restart Task'
+```
+
+To supply a well-founded duration estimate for jobs without available historical execution data:
+
+```yaml
+analysis:
+  duration_overrides_minutes:
+    'sql_agent:SQL01:Nightly ETL': 90
+```
+
+Unlike normal exclusions, `analysis.watchdogs` and `analysis.exclude_from_load` prevent a task from contributing to `overlaps.csv` and `starts-by-hour.csv`, but don't delete it from the inventory. All decisions appear in `exclusions.csv`.
+
+## Limitations and next improvements
+
+Current support covers the recurring calendars above; unsupported cases remain visible as warnings. It deliberately does not claim to predict calendar exceptions, SQL Agent idle/startup events, advanced Windows event triggers, systemd monotonic timers, arbitrary systemd calendar expressions, SQL Agent schedules with complex server-specific timezone effects, or runtime contention. Those items appear in `warnings.csv` where identified.
+
+**Overlaps are potential scheduling conflicts, not proof of simultaneous CPU/disk load.** A database scheduler, OS task, or external orchestrator may skip duplicate launches, queue jobs, have singleton/mutex enforcement, use randomized delays, or run with widely varying data-dependent durations. The report provides median/P95, sample size and override provenance so you can prioritize investigating plausible hotspots instead of relying on a false certainty.
+
+## operations analysis
+
+See `examples/schedule-operations.yaml`. `analysis.enabled` controls observed execution matching, missed/late/long-running/failed starts, successful runtime medians/P95/trends, weighted shared resources, dependency windows, deadlines, hypothetical shifts and watchdog evidence.
+
+Observations match an explicit expected start when supplied, otherwise the nearest projected start within tolerance. A missing history row becomes a missed-run finding only when the input explicitly declares complete history coverage. Built-in best-effort event/history collectors do not automatically prove that completeness. Duplicate/truncated/inaccessible history, unsupported triggers and DST ambiguity require review.
+
+Concurrency is grouped by physical host across instances; explicit resource assignments can represent shared storage/CPU pools. Weights and capacities are user assumptions, not measured per-job CPU/I/O attribution. Scenario shifts change a report only. Running/failed observations remain useful even when successful duration samples are unavailable; P95 estimates are based on available history, not guaranteed deadlines.
+
+A watchdog's frequent launch is not proof of useful work. Configure independent useful-work heartbeat evidence; a missing heartbeat is unknown unless its expected deadline can be evaluated. Per-report exclusions apply to new report types as well. Disabled reports are recorded in `report-status.json`, so the dashboard/monitor do not consume a stale disabled CSV left from an earlier run.
+
+
+## matching, report safety and limits
+
+Execution matching first honors explicit scheduled-start facts, then assigns nearest eligible observed/planned pairs across the job's horizon. A later exact match cannot be consumed by an earlier occurrence's wide tolerance window. Matching is heuristic when a scheduler supplies no scheduled-start identity; overlapping tolerances, duplicate logs and catch-up behavior can remain ambiguous. Supply explicit scheduled_start values for authoritative association. Absence becomes missed only with explicitly declared complete history coverage.
+
+The static dashboard links all enabled available analytical CSVs, including runtime trends, resource conflicts, dependencies, deadlines, watchdogs and scenarios. Its 200-row table and 100-warning caps are explicitly displayed. Disabled report links are omitted. The [optional portal](review-portal.md) adds search, filtered exports, timeline, heatmap, timezone and history charts.
+
+Schedule generation writes to staging before publishing; source parse/analysis failures preserve previous aggregate reports and write a failed generation-status.json. Consumers must inspect that status and the source timestamp instead of treating old CSVs as current. The aggregate is not partially refreshed after one input fails. Monitoring handles that failed report independently and continues other inputs.
+
+analysis.max_overlap_rows defaults to 20,000 rows for each overlap output; warnings/summary record truncation and counts are lower bounds. analysis.max_occurrences and analysis.max_match_pairs default to 500,000. Exceeding either fails the generation and preserves its previous aggregate; reduce the horizon, input history or match tolerance. Limits do not fabricate missing work. All units and P95 estimates retain their original assumptions.
+
+## Capacity and measured load
+
+`resource-capacity.csv` independently reports weighted peak demand and minutes above configured capacity, including a single oversized job. The scenario HTML includes capacity heatmaps and duration evidence; predicted conflicts do not establish measured contention.
+
+`observed-runs.csv` exports collected completed runs for the optional [performance report](performance.md). Load exclusions and watchdog rules also apply to this export. PerfMon/sysstat samples can then be aligned by host and UTC interval to observed overlaps. The report shows coverage, pressure thresholds, sample-value P95 and same-job solo sample comparisons. Missing ends, gaps, unknown hosts and coarse intervals remain explicit; correlation does not establish causation or job ownership of host resources.

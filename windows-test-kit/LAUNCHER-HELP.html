@@ -1,0 +1,13 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>ConfigBackup launcher help</title><style>body{font:17px/1.5 system-ui,sans-serif;max-width:850px;margin:3rem auto;padding:0 1rem;color:#182536}pre{white-space:pre-wrap}</style><h1>ConfigBackup 1.0.0 launcher help</h1><pre>Python must work before the launcher can make a machine report. No tests have run if this help page opened because Python is missing.
+
+Run-SafeTests.cmd offers a visible Python 3.14 WinGet installer if no Python is found. Installation requires your choice. If WinGet is unavailable or installation fails, use your organization&#x27;s approved Python 3.10+ installation. Reopen your terminal/launcher after installation if PATH discovery needs refreshing.
+
+For a custom installation set CONFIGBACKUP_TEST_PYTHON to its full executable path in PowerShell:
+$env:CONFIGBACKUP_TEST_PYTHON = &#x27;C:\Approved\Python\python.exe&#x27;
+.\Run-SafeTests.cmd
+
+A selected but broken Python environment is not silently replaced. Remove an obsolete override or repair that environment through your approved process. Keep every kit file together and run from an extracted local folder.
+
+When Python starts, the launcher can offer PyYAML, ruamel.yaml and tzdata in a new test environment and Git via WinGet, then rerun checks. You can decline and continue available tests. Windows roles/RSAT are never installed. Read LAUNCHER-GUIDE.txt for details, offline wheels and optional role captures.
+
+Keep local results local. This page is help, not a test result.</pre><p><a href="LAUNCHER-GUIDE.txt">Full launcher guide</a></p></html>

@@ -1,0 +1,46 @@
+# Merge selected sections into your existing config; nothing activates a service.
+integrity:
+  enabled: true
+  required: false
+  interval_hours: 24
+  max_verification_age_hours: 168
+  max_files: 500
+  max_bytes: 268435456
+recovery_readiness:
+  enabled: false
+  required: false
+  max_bytes: 268435456
+  max_seconds: 30
+  copy_roots: [] # Absolute archive mirror roots; primary counts as one.
+  targets:
+    - task: '*'
+      scope: '*'
+      max_backup_age_hours: 24
+      max_verification_age_hours: 168
+      min_verified_copies: 1
+monitoring:
+  enabled: false
+  performance_reports:
+    - path: /private/reports/performance/performance.json
+      enabled: true
+      max_age_hours: 24
+  rules:
+    - id: performance-evidence-missing
+      metric: performance.source.unavailable
+      op: gt
+      warning: 0
+      clear: 0
+      consecutive: 1
+    - id: observed-overlap-pressure
+      metric: performance.overlap_pressure_count
+      op: gt
+      warning: 0
+      clear: 0
+      consecutive: 1
+  # In an existing SMTP channel, add performance to sections and enable digest.
+  # notifications:
+  #   channels:
+  #     - id: ops
+  #       type: smtp
+  #       ...existing TLS and environment-based authentication settings...
+  #       sections: [alerts, performance, recovery]

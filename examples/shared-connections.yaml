@@ -1,0 +1,76 @@
+# Edit paths/endpoints for this host. Secret values belong in the scheduled account's vault.
+backup:
+  root: /srv/configbackup/archive
+connections:
+  sql-primary:
+    engine: sqlserver
+    server: SQLHOST\INSTANCE1
+    access_profile: read-only
+    # Omit both for Windows integrated authentication under the scheduled account.
+    user: configbackup_reader
+    password_env: CONFIGBACKUP_SQL_PASSWORD
+    pwsh: pwsh
+    sqlpackage: sqlpackage
+    trust_server_certificate: false
+    databases: [ApplicationDB]
+    schema: true
+    include_health: true
+    include_history: true
+    timeout: 900
+  pg-primary:
+    engine: postgresql
+    host: pghost.example.internal
+    port: 5432
+    user: configbackup_reader
+    sslmode: verify-full
+    # libpq service/pgpass also supported; avoid putting passwords in this file.
+    password_env: CONFIGBACKUP_PG_PASSWORD
+    maintenance_db: postgres
+    access_profile: read-only
+    databases: [application]
+    schema: true
+    include_health: true
+    include_history: true
+    timeout: 900
+tasks:
+  - name: collect-sql
+    type: execute
+    connection: sql-primary
+    enabled: true
+    clean_output: true
+    output_directory: ${CONFIGBACKUP_STAGING}/sql-primary
+    # Optional task selection overrides. Authentication stays in connections.
+    collection: {}
+    sections: {}
+    required_sections:
+      - databases/ApplicationDB/schema/*
+      - instance/catalog/configuration.csv
+      - instance/agent/jobs.csv
+  - name: archive-sql
+    type: directory
+    source: ${CONFIGBACKUP_STAGING}/sql-primary
+    destination: sql-primary
+    depends_on: [collect-sql]
+    collection_manifest: true
+    storage: filesystem
+  - name: collect-pg
+    type: execute
+    connection: pg-primary
+    clean_output: true
+    output_directory: ${CONFIGBACKUP_STAGING}/pg-primary
+    required_sections: [databases/application/schema.sql]
+  - name: archive-pg
+    type: directory
+    source: ${CONFIGBACKUP_STAGING}/pg-primary
+    destination: pg-primary
+    depends_on: [collect-pg]
+    collection_manifest: true
+    storage: filesystem
+monitoring:
+  enabled: false
+  sources:
+    # Enable monitoring and schedule diagnostics with --capability-history here.
+    # Keep runtime state OUTSIDE configuration/Git source trees.
+    - name: readiness
+      path: /srv/configbackup/runtime/readiness/*.json
+      enabled: true

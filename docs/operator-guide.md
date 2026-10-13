@@ -1,0 +1,16 @@
+# ConfigBackup operator guide
+
+Use one complete 1.0.0 distribution and a private candidate configuration. The engine runs on Python 3.10+ on Windows, Linux and macOS; database and OS collectors require the appropriate native clients and permissions. See VALIDATION.md for the exact test matrix.
+
+1. Install requirements.txt into a dedicated Python virtual environment. Encryption and the macOS performance fallback have separate optional requirements files. The menu's autodetect/setup checks can suggest clients and approved dependency installation paths.
+2. Run `python configure.py --config candidate.yaml`. Use shared connections, choose collector sections, and test available capabilities under the actual scheduled account. A section switch retains its settings. A denied or unavailable feature is not a successful collection.
+3. Preserve configuration/startup assets using the default automatic configuration backup. Generate credential-reference launchers; keep secret values in the account's environment/vault. Review collected content and the Git secret gate before publication.
+4. Validate, dry-run, then run a small real backup. Inspect collection-manifest.json, the run result and the HTML review portal. SQL Server databases and independent service sections are certified separately; PostgreSQL schema failure preserves its whole database while other scopes continue.
+5. Test unchanged captures and a disposable failed section. A failed scope must retain its archive/Git bytes and history while a healthy sibling advances. Never simulate failures against production databases. A global malformed manifest cannot authorize updates.
+6. Configure schedules through Task Scheduler, cron or a systemd timer. Test identity, credentials and tool visibility under that scheduled account. Collection cadence retries outstanding archive or Git work.
+7. Review retention previews and verify recovery copies. Optional bounded integrity scrubbing records hash-check age; explicit repair plans can replace a damaged current version only from a source with its exact expected hash. Retention refuses a scope when its proposed surviving versions are missing or corrupt.
+8. Use recovery status to distinguish collection, archive, local commit, push, integrity and file-restore evidence. A hash check or file restore does not prove a live database/application restore. Keep matching state and archive together.
+9. Optionally enable native recording and performance reports. Recording, report generation, history retention and Git configuration are separate concerns. Keep runtime paths outside configuration source trees. Use observed job executions, matching host IDs and correct time zones for overlap comparisons.
+10. Build a platform-specific offline deployment pack after validating installed Python dependencies. Verify it and rehearse installation into a new environment. Install native OS/database tools separately. The pack contains application code and wheels; setup exports contain configuration/assets. Neither is a database-data backup.
+
+The [recovery and deployment guide](integrity-profiles-and-deployment.md) documents the new workflows and limitations. Current feature references are indexed in [README](README.md).

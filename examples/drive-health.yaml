@@ -1,0 +1,11 @@
+# Used with collect_system.py --include-drive-health --smart-config this-file.yaml
+# Omit --smart-config to discover smartctl-supported devices automatically.
+# Explicit devices are useful for controller/USB pass-through; test the correct
+# smartctl device type for YOUR hardware. This collector never runs self-tests.
+devices:
+  - path: /dev/disk0
+    type: nvme
+    enabled: false
+  - path: /dev/sda
+    type: sat
+    enabled: false

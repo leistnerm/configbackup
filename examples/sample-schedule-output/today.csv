@@ -1,0 +1,9 @@
+start,end_estimated,duration_minutes,duration_basis,job_id,source,job,schedule,cadence,watchdog
+2026-10-08T00:00:00,,,unknown,windows:\Maintenance\Restart Watchdog,windows,\Maintenance\Restart Watchdog,Trigger 1: MSFT_TaskDailyTrigger,daily,false
+2026-10-08T00:05:00,,,unknown,windows:\Maintenance\Restart Watchdog,windows,\Maintenance\Restart Watchdog,Trigger 1: MSFT_TaskDailyTrigger,daily,false
+2026-10-08T00:10:00,,,unknown,windows:\Maintenance\Restart Watchdog,windows,\Maintenance\Restart Watchdog,Trigger 1: MSFT_TaskDailyTrigger,daily,false
+2026-10-08T00:15:00,,,unknown,windows:\Maintenance\Restart Watchdog,windows,\Maintenance\Restart Watchdog,Trigger 1: MSFT_TaskDailyTrigger,daily,false
+2026-10-08T00:20:00,,,unknown,windows:\Maintenance\Restart Watchdog,windows,\Maintenance\Restart Watchdog,Trigger 1: MSFT_TaskDailyTrigger,daily,false
+2026-10-08T00:25:00,,,unknown,windows:\Maintenance\Restart Watchdog,windows,\Maintenance\Restart Watchdog,Trigger 1: MSFT_TaskDailyTrigger,daily,false
+2026-10-08T01:00:00,2026-10-08T02:10:00,70.0,observed,sql_agent:SQL01:Nightly ETL,sql_agent,Nightly ETL,Nightly,daily,false
+2026-10-08T01:00:00,2026-10-08T01:40:00,40.0,observed,windows:\Maintenance\Disk Cleanup,windows,\Maintenance\Disk Cleanup,Trigger 1: MSFT_TaskDailyTrigger,daily,false

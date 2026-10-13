@@ -1,0 +1,23 @@
+# Merge into a configuration with existing managed database connections/tasks.
+integrity:
+  enabled: false
+  required: false
+  max_files: 500
+  max_bytes: 268435456
+  max_seconds: 30
+  interval_hours: 168
+collection_profiles:
+  sql-light:
+    engine: sqlserver
+    collection:
+      include_history: false
+      include_health: false
+    collection_interval_hours: 24
+    max_scope_bytes: 268435456
+  pg-normal:
+    engine: postgresql
+    collection:
+      include_history: true
+      include_health: false
+# Add `profile: sql-light` or `profile: pg-normal` to a task whose connection engine matches.
+# Explicit task settings override profile settings. Use Effective preview to inspect origins.

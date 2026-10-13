@@ -1,0 +1,39 @@
+# Diagnostic-only configuration. Copy database_diagnostics into your main YAML,
+# or use this file with --diagnose-database PROFILE. No backup root is needed.
+# Credentials stay in the existing environment, libpq configuration or process identity.
+database_diagnostics:
+  - name: sql-reader
+    engine: sqlserver
+    enabled: true
+    server: localhost,1433
+    access_profile: read-only
+    # Omit user/password_env together to use integrated authentication.
+    user: configbackup_reader
+    password_env: CONFIGBACKUP_SQL_PASSWORD
+    databases: [ApplicationDB]
+    pwsh: pwsh
+    sqlpackage: sqlpackage
+    trust_server_certificate: false
+    schema: true
+    include_health: true
+    include_history: true
+    timeout: 600
+    connect_timeout: 10
+    sections: {}
+  - name: pg-reader
+    engine: postgresql
+    enabled: true
+    host: localhost
+    port: 5432
+    user: configbackup_reader
+    maintenance_db: postgres
+    access_profile: read-only
+    # Optional: service, sslmode, bin_dir, password_env.
+    # With no password_env, use pgpass/service/peer/Kerberos or PGPASSWORD.
+    databases: [ApplicationDB]
+    schema: true
+    include_health: true
+    include_history: true
+    timeout: 600
+    connect_timeout: 10
+    sections: {}

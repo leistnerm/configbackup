@@ -1,0 +1,46 @@
+-- DISPOSABLE INSTANCE ONLY. Read tests/integration/README.md first.
+USE [{{DATABASE}}];
+GO
+CREATE SCHEMA Security;
+GO
+CREATE FUNCTION Security.allow_tenant(@tenant int)
+RETURNS TABLE WITH SCHEMABINDING AS RETURN SELECT 1 AS allowed WHERE @tenant = CONVERT(int,SESSION_CONTEXT(N'tenant_id'));
+GO
+CREATE TABLE dbo.tenant_data(id int PRIMARY KEY,tenant_id int NOT NULL,email varchar(100) MASKED WITH (FUNCTION='email()'),secret_value varchar(100) MASKED WITH (FUNCTION='partial(1,"XXXX",1)'));
+GO
+CREATE SECURITY POLICY Security.tenant_policy ADD FILTER PREDICATE Security.allow_tenant(tenant_id) ON dbo.tenant_data,ADD BLOCK PREDICATE Security.allow_tenant(tenant_id) ON dbo.tenant_data AFTER INSERT WITH (STATE=ON);
+GO
+CREATE TABLE dbo.temporal_data(id int PRIMARY KEY,value nvarchar(60), valid_from datetime2 GENERATED ALWAYS AS ROW START NOT NULL,valid_to datetime2 GENERATED ALWAYS AS ROW END NOT NULL,PERIOD FOR SYSTEM_TIME(valid_from,valid_to)) WITH (SYSTEM_VERSIONING=ON(HISTORY_TABLE=dbo.temporal_history));
+CREATE PARTITION FUNCTION cb_partition(int) AS RANGE RIGHT FOR VALUES(10,100);
+CREATE PARTITION SCHEME cb_scheme AS PARTITION cb_partition ALL TO ([PRIMARY]);
+CREATE TABLE dbo.partitioned_data(id int NOT NULL,value varchar(20)) ON cb_scheme(id);
+CREATE INDEX ix_partitioned ON dbo.partitioned_data(id) WITH(DATA_COMPRESSION=PAGE) ON cb_scheme(id);
+CREATE SEQUENCE dbo.config_sequence AS bigint START WITH 100 INCREMENT BY 5;
+CREATE SYNONYM dbo.config_synonym FOR dbo.first_config;
+CREATE ROLE config_reader;
+GRANT SELECT ON SCHEMA::dbo TO config_reader;
+DENY UPDATE ON dbo.tenant_data TO config_reader;
+ALTER DATABASE {{DATABASE}} ADD FILEGROUP cb_memory CONTAINS MEMORY_OPTIMIZED_DATA;
+ALTER DATABASE {{DATABASE}} ADD FILE(NAME=N'cb_memory_file',FILENAME=N'{{MEMORY_FILE_PATH}}') TO FILEGROUP cb_memory;
+GO
+CREATE TABLE dbo.memory_config(id int NOT NULL PRIMARY KEY NONCLUSTERED HASH WITH(BUCKET_COUNT=1024),value nvarchar(40)) WITH(MEMORY_OPTIMIZED=ON,DURABILITY=SCHEMA_ONLY);
+GO
+USE msdb;
+EXEC dbo.sp_add_job @job_name=N'ConfigBackup_Test_MultiSchedule',@enabled=1,@description=N'Determinism fixture';
+EXEC dbo.sp_add_jobstep @job_name=N'ConfigBackup_Test_MultiSchedule',@step_name=N'Check',@subsystem=N'TSQL',@command=N'SELECT 1;',@database_name=N'{{DATABASE}}';
+EXEC dbo.sp_add_schedule @schedule_name=N'ConfigBackup_Test_Every5',@freq_type=4,@freq_interval=1,@freq_subday_type=4,@freq_subday_interval=5,@active_start_date=20261001;
+EXEC dbo.sp_add_schedule @schedule_name=N'ConfigBackup_Test_Weekly',@freq_type=8,@freq_interval=2,@freq_recurrence_factor=2,@active_start_date=20261001,@active_start_time=230000;
+EXEC dbo.sp_attach_schedule @job_name=N'ConfigBackup_Test_MultiSchedule',@schedule_name=N'ConfigBackup_Test_Every5';
+EXEC dbo.sp_attach_schedule @job_name=N'ConfigBackup_Test_MultiSchedule',@schedule_name=N'ConfigBackup_Test_Weekly';
+
+USE [{{DATABASE}}];
+GO
+CREATE FULLTEXT CATALOG cb_text AS DEFAULT;
+CREATE FULLTEXT STOPLIST cb_stop FROM SYSTEM STOPLIST;
+CREATE TABLE dbo.search_docs(id int NOT NULL CONSTRAINT pk_search_docs PRIMARY KEY,body nvarchar(max));
+CREATE FULLTEXT INDEX ON dbo.search_docs(body LANGUAGE 1033) KEY INDEX pk_search_docs ON cb_text WITH (STOPLIST=cb_stop,CHANGE_TRACKING=MANUAL);
+CREATE TABLE dbo.analytics_events(id int,category int,amount decimal(12,2),occurred datetime2) ON cb_scheme(category);
+CREATE CLUSTERED COLUMNSTORE INDEX cci_events ON dbo.analytics_events WITH(DATA_COMPRESSION=COLUMNSTORE_ARCHIVE) ON cb_scheme(category);
+GO
+CREATE PROCEDURE dbo.memory_lookup @id int WITH NATIVE_COMPILATION,SCHEMABINDING,EXECUTE AS OWNER AS BEGIN ATOMIC WITH(TRANSACTION ISOLATION LEVEL=SNAPSHOT,LANGUAGE=N'us_english') SELECT value FROM dbo.memory_config WHERE id=@id; END;
+GO

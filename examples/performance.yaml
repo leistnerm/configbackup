@@ -1,0 +1,45 @@
+# Merge this optional section into a backup configuration. All paths are private runtime paths.
+# Saving this file does not enable a native recorder. Use the configurator's reviewed Enable action.
+performance:
+  enabled: false
+  required: false
+  export_native: false
+  output: /srv/configbackup/runtime/performance-report
+  recording:
+    # Backend defaults to perfmon on Windows, sysstat on Linux, psutil on macOS.
+    directory: /srv/configbackup/runtime/performance-history
+    interval_seconds: 15
+    chunk_samples: 60
+    keep_days: 7
+    max_mb: 256
+    # Required when exporting an owned PerfMon recorder with naive timestamps:
+    timezone: America/New_York
+  sources:
+    - id: linux-native
+      enabled: false
+      type: native_history
+      format: sysstat_json
+      path: /srv/configbackup/runtime/performance-history/history-index.json
+      host: application-host
+      max_chunks: 96
+    - id: windows-export
+      enabled: false
+      type: perfmon_csv
+      path: 'C:/ConfigBackup/Runtime/perfmon-export.csv'
+      host: application-host
+      timezone: America/New_York
+      clock_offset_seconds: 0
+  job_history: [/srv/configbackup/runtime/schedules/observed-runs.csv]
+  exclude_jobs: ['system:watchdog*']
+  max_sample_seconds: 180
+  minimum_samples: 3
+  minimum_coverage: 0.7
+  max_rows: 200000
+  max_input_bytes: 52428800
+  max_comparisons: 5000
+  max_details: 10000
+  thresholds:
+    cpu.busy_percent: 90
+    memory.commit_percent: 95
+    disk.latency_ms: 20
+    disk.queue: 2

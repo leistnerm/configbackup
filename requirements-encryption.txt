@@ -1,0 +1,2 @@
+# Optional recovery encryption only; ordinary collection does not import it.
+cryptography>=44,<51

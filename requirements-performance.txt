@@ -1,0 +1,2 @@
+# Optional macOS CPU/memory fallback; Windows/Linux prefer native recorders.
+psutil>=7.2.2,<8

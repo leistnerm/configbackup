@@ -1,0 +1,186 @@
+CONFIGBACKUP SAFE WINDOWS LAUNCHER - KIT 1.0.0
+Prepared 12 October 2026. Application 1.0.0; pinned GPO harness 1.0.0.
+
+QUICK START
+1. Extract the entire ZIP to a local, nonsynced folder. Keep all files together.
+2. Run Run-SafeTests.cmd. For computer GPO and role access, use Run as
+   administrator when appropriate for your computer. Tests use that account.
+3. Review any missing-prerequisite offers. Installation is optional and needs
+   your explicit choice. Installer/license/UAC prompts remain visible.
+4. Optionally choose installed components: iis,dns,dhcp,hyperv,certificates,
+   dfs,nps,wef,wsus,adcs. Enter skips all. Deeper bundles use CLI flags below.
+5. Review the single report.html that opens at completion. Its path is printed:
+   %LOCALAPPDATA%\ConfigBackup\SafeTests\<timestamp>-<unique-id>\report.html
+   Logs, XML, component JSON and full diffs stay beside it. Keep sensitive configuration data local.
+
+Each run uses a fresh directory. The launcher does not deploy production code,
+load your production backup configuration or change policies. Three GPO captures
+are 30 seconds apart; each gpresult call has a 120-second timeout. Allow several
+minutes. Selected component captures run twice; each role has a 300-second
+per-capture timeout. Failed queries appear individually in the same report.
+Outputs inherit folder permissions. UNC/mapped drives are rejected; the tool
+cannot detect every sync product. Use storage approved for local sensitive configuration data.
+
+OPTIONAL PREREQUISITE SETUP
+If no usable Python is found, the CMD wrapper offers this visible installer:
+  winget install --id Python.Python.3.14 --exact --source winget --scope user --interactive --no-upgrade
+It tries normal discovery again, including standard current-user Python 3.14
+paths. A custom location or a new PATH may require reopening the terminal and
+launcher, or setting CONFIGBACKUP_TEST_PYTHON to the executable. A deliberately
+selected but broken Python is reported instead of silently replaced. If Python
+still cannot start, LAUNCHER-HELP.html opens: no tests ran and no machine report
+can be made yet. Missing WinGet is reported; the launcher does not install it.
+
+After kit verification, missing PyYAML/ruamel.yaml/time-zone data offers:
+- Online packages in a NEW virtual environment under this run's report folder.
+- Packages from your approved LOCAL wheel folder in the same new environment.
+- Skip installation and continue available independent checks.
+
+Packages are PyYAML 6.x, ruamel.yaml 0.18.x and tzdata. Only binary packages
+are accepted. ruamel.yaml supports comment-preserving configuration edits. Existing
+Python packages are not updated. The new interpreter is checked in a fresh
+process and is used for tests only after the checks pass. Offline wheels must
+match Windows, your Python version and architecture; wheels are not included.
+File-based pip configuration and install-location overrides are disabled to
+keep installation inside the new environment. Approved index/proxy/certificate
+environment settings are retained; no TLS verification bypass is added.
+
+If Git is missing and WinGet exists, a separate explicit offer uses:
+  winget install --id Git.Git --exact --source winget --interactive --no-upgrade
+The installer chooses its supported scope and can request elevation. Afterward
+the current process refreshes PATH and checks git --version. The launcher does
+not persist its own PATH edits. A failed/declined install is recorded and does
+not stop other available checks. Installer outcomes and rechecks appear in the
+report. Downloads/installers can contact package publishers after consent;
+collection results are not uploaded. Normal installer logs/behavior belong to
+the installer. No roles, RSAT, database clients or permissions are installed.
+
+PYTHON SELECTION AND MANUAL SETUP
+Selection order: CONFIGBACKUP_TEST_PYTHON; .venv\Scripts\python.exe beside the
+kit; venv\Scripts\python.exe; py.exe -3; python.exe. A selected environment that
+fails does not silently fall back. Children run with -I, ignoring user-site
+packages and PYTHON* overrides. Python 3.10+ is required. No PowerShell 7 is
+required for the launcher; component queries prefer Windows PowerShell.
+
+Optional manual preparation, from PowerShell in the extracted kit:
+  py -3 -m venv .venv
+  .\.venv\Scripts\python.exe -m pip install 'PyYAML>=6.0,<7' 'ruamel.yaml>=0.18.6,<0.19' 'tzdata>=2024.1'
+  .\Run-SafeTests.cmd
+Use --no-index --find-links C:\ApprovedWheels with pip for matching local wheels.
+Use another approved Python:
+  $env:CONFIGBACKUP_TEST_PYTHON = 'C:\Approved\Python\python.exe'
+  .\Run-SafeTests.cmd
+Remove that override in the same shell:
+  Remove-Item Env:CONFIGBACKUP_TEST_PYTHON
+
+WHAT THE TESTS DO
+- Verify listed kit files, pinned inner ZIP hashes, safe ZIP paths and CRCs;
+  extract fresh copies. Checksums detect corruption, not signed identity.
+- Recheck Python, PyYAML, ruamel.yaml, IANA time-zone data, Git and Windows capabilities.
+- Run 259 selected synthetic application checks covering partial-snapshot
+  preservation, recovery, deletion scope, local Git/secret blocking, schedules,
+  database failure isolation, configuration editing, reports and notifications.
+  Without Git, 239 checks can run; 20 are NOT RUN. Missing required Python packages
+  skips this stage while independent GPO/component checks remain available.
+- Run 42 GPO fixture tests (41 pass and one expected skip on Windows).
+- Capture effective computer/process-user GPO three times, compare normalized
+  bytes and show coverage/errors/diffs in the main report. No gpupdate runs.
+- If selected, capture the chosen component/detail inventories twice and compare
+  certified JSON. Deeper bundles imply their base component.
+- Checkpoint the report after stages; one failure does not stop later stages.
+
+OPTIONAL WINDOWS COMPONENTS
+All ten are disabled by default. Choose only the LOCAL installed components you
+want to inspect. Missing modules, permissions and unsupported properties are
+reported as failures; they are not evidence of an empty configuration.
+  IIS: sites, pools, applications, bindings/certificate references, selected
+       server/effective application configuration, auth and ordered handlers.
+  DNS: server settings, zones, records/TTLs, forwarders, recursion and aging.
+  DHCP: IPv4/IPv6 scopes, options/definitions, reservations, exclusions and
+        selected policies/failover configuration; no leases or credentials.
+  Hyper-V: host/switch settings, VMs, CPU/memory, disks, NICs/VLANs, boot/security
+           configuration; no disk contents, VM state or runtime counters.
+
+  certificates: public certificate metadata and IIS HTTPS certificate references;
+                no private-key export. Expiry health is separate telemetry.
+  DFS: local namespace targets and local DFSR configuration, no file contents.
+  NPS: allowlisted RADIUS client metadata and English policy summaries;
+       no shared secrets, full conditions or policy profile exports.
+  WEF: selected subscription XML configuration, no event contents/credentials.
+  WSUS: selected server, sync, category and group configuration; no updates,
+        approvals, downstream client inventories or password getters.
+  AD CS: allowlisted public CA registry configuration; no keys or CA database.
+
+Five deeper bundles are also off by default and selected using CLI flags:
+  iis-extended: rewrite/outbound rules, ARR, FTP and configured nested locations.
+  dns-policies: query policies, client subnets, recursion/zone scopes and records.
+  dhcp-reservation-options: IPv4/IPv6 per-reservation option overrides.
+  hyperv-network: switch extensions/teams, SAN configuration and NIC ACLs/isolation.
+  hyperv-replication: replica configuration/endpoints, without runtime health.
+The interactive component prompt selects base inventories only. Use repeated
+--windows-detail flags for deeper bundles; each implies its base component.
+
+Read docs/windows-components.md and docs/optional-platform-inventory.md in the
+application for exact coverage limits and unsupported/version-specific queries.
+These selected inventories are not complete service recovery backups. The
+adapter does not cover every Windows role or every extension/setting within
+these roles. DNS TXT, headers and other generic strings may contain sensitive
+content: keep exports local and retain the normal Git secret gate.
+
+For scheduled backups use examples/windows-components.yaml or the config CLI's
+System template. Each role/query can be disabled via section switches. Keep the
+collection manifest enabled. A failed/disabled query preserves that scope's
+existing archive/Git data. Successful queries continue; disappeared discovered
+objects are deliberately retained for review instead of automatically deleted.
+The test launcher only writes comparison captures, not production archives.
+
+ACCOUNT AND COMMAND-LINE OPTIONS
+The process account supplies default user GPO. If elevation uses a DIFFERENT
+account, optionally add your normal user (no passwords, no impersonation):
+  $env:CONFIGBACKUP_TEST_USER = 'DOMAIN\yourname'
+  .\Run-SafeTests.cmd
+That user needs existing RSoP data. Missing scope data is INCOMPLETE.
+
+Direct runner (noninteractive unless an offer flag is provided):
+  .\.venv\Scripts\python.exe -I -B .\Run-WorkstationTests.py
+Options:
+  --offer-install             Offer missing packages/Git after verification.
+  --wheelhouse C:\ApprovedWheels  Initial local wheel-folder choice.
+  --offer-components          Ask which installed local roles to capture.
+  --windows-component iis     Repeat for any of the ten names above.
+  --windows-detail dns-policies  Repeat for the five deeper bundles above.
+  --user 'DOMAIN\yourname'    Add that user scope.
+  --output C:\LocalTests\NewRun  Fresh local folder only.
+  --no-open                   Save without opening the browser.
+  --offline-only              Skip live GPO/components; overall INCOMPLETE.
+Set CONFIGBACKUP_TEST_NO_PAUSE=1 to omit the CMD ending pause. It does not
+suppress installation prompts or make interactive setup suitable for scheduling.
+
+READING THE REPORT
+PASS (exit 0): selected checks completed. Review expected known objects anyway.
+REVIEW (exit 2): completed captures changed; inspect meaningful differences.
+INCOMPLETE (exit 3): missing dependency, failed/missing scope, unexpected skip,
+platform limitation or offline-only run. Other scopes can still contain changes.
+FAIL (exit 1): integrity, fixture, result-format or runner failure.
+Installation history is separate: fresh dependency/test outcomes determine the
+result. A report left at Running is unfinished, not passed.
+
+Check account/SID/elevation, each expected GPO scope and all three captures.
+Check known GPO names, settings, security/WMI filters and applied/denied results.
+XML node counts are not applied-policy counts. Compare normalized vs raw hashes.
+For components check known sites/zones/scopes/VMs, certificates, subscriptions
+and other selected inventory objects; check values and unavailable query paths,
+ordered handlers/forwarders/options/boot entries, secret placeholders and full
+diffs. Dynamic DNS records and real concurrent administration can legitimately
+change. Stable repeated exports do not prove that every setting was collected.
+
+No test changes policy, enables roles, edits registry/firewall/tasks, contacts
+SQL/PostgreSQL, pushes Git, sends mail or uploads results. Synthetic tests write
+local temporary repositories/archives. Normal OS logging still occurs. No
+execution-policy bypass is used. If organizational controls block a component,
+use the approved process; do not weaken policies to make a test pass.
+
+WINDOWS-TESTING.md describes platform limits and local acceptance. The
+launcher runs the selected checks automatically. Production cutover is not automated.
+See KIT-VALIDATION.txt for fixture coverage and unverified Windows
+behaviors. Keep/delete results under your local data retention rules.

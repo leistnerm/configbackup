@@ -1,0 +1,19 @@
+Run as an administrator after reviewing the generated SQL. These scripts do not create logins or store passwords.
+
+Use a NEW dedicated account. Existing ownership, inherited roles, PUBLIC grants and executable privileged procedures/functions can add write powers.
+
+The grants add read/metadata access only. They cannot universally prove that an arbitrary existing account has no write path.
+
+Read access can expose confidential data, SQL text and job commands. Protect output and inspect the audit results.
+
+No database is modified by the generator. Applying the SQL changes permissions; no data or application objects are changed.
+
+Use the collector read-only access profile. Privileged instance script exports and protected services can remain failed/preserved. See docs/read-only-access.md.
+
+PostgreSQL: pg_read_all_data applies across the cluster, including future tables/schemas; this is broader than the databases selected for collection. BYPASSRLS prevents scheduler/table policies from silently hiding metadata.
+
+If cluster-wide data read or BYPASSRLS is unacceptable, do not apply this profile: retain the full-visibility collector requirement or design a separately audited narrower inventory.
+
+Run audit-database-access.sql in each database, and remove inappropriate existing permissions through your normal admin process. PUBLIC CREATE and SECURITY DEFINER execution can defeat a read-only identity.
+
+Use --read-only-access. Authentication remains pg_service.conf/pgpass, peer/Kerberos or environment secret injection; this generator never embeds a password.

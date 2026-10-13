@@ -1,0 +1,47 @@
+# Standalone: python reporting.py --config examples/review-portal.yaml --output /srv/configbackup-review
+# Or copy reporting into the main configuration; disabled until real paths are set.
+reporting:
+  enabled: false
+  required: false
+  output: /srv/configbackup-review
+  timezone: America/New_York
+  # Set a fixed UTC instant and a fixed baseline for reproducible offline output.
+  # as_of: '2026-10-11T12:00:00Z'
+  include_values: false
+  max_file_bytes: 1000000
+  max_files: 20000
+  max_rows: 5000
+  max_report_bytes: 50000000
+  max_source_age_hours: 24
+  history_days: 30
+  history_points: 10000
+  # state: /srv/configbackup/.configbackup/state.json
+  # monitoring_path: /srv/configbackup/.configbackup/monitoring
+  snapshots:
+    - id: sql-primary
+      enabled: true
+      path: /srv/configbackup-staging/sql
+      # baseline: /srv/review-baselines/sql-approved
+    - id: windows-host
+      enabled: false
+      path: C:/ConfigBackup/staging/system
+  schedule_paths:
+    - path: /srv/configbackup-schedules
+      enabled: true
+  runtime_paths: []
+  # Optional network runtime inventory, matched to snapshot id:
+  # - {id: windows-host, path: C:/ConfigBackup/staging/system/telemetry/network/inventory.json}
+  # CSV row order is significant unless unique identity columns are declared.
+  csv_keys: {}
+  # restore_as_of: '2026-10-01T00:00:00Z'
+  sections:
+    coverage: {enabled: true}
+    changes: {enabled: true}
+    explorer: {enabled: true}
+    schedules: {enabled: true}
+    history: {enabled: true}
+    notifications: {enabled: true}
+    recovery: {enabled: true}
+    disappeared: {enabled: true}
+    quality: {enabled: true}
+    exposure: {enabled: true}

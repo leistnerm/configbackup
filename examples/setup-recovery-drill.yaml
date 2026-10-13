@@ -1,0 +1,27 @@
+# Merge this fragment into an existing configuration; edit all paths.
+# The existing OS scheduler invokes ConfigBackup; this does not install a timer.
+tasks:
+  - name: setup-recovery-drill
+    type: execute
+    phase: pre_backup
+    executable: python3
+    arguments:
+      - /opt/configbackup/setup_recovery.py
+      - drill
+      - --bundle
+      - /private/recovery/current-setup
+      - --history
+      - /private/runtime/setup-drill
+      - --interval-days
+      - '7'
+      - --keep
+      - '12'
+    required: false
+    timeout: 600
+monitoring:
+  enabled: true
+  sources:
+    - path: /private/runtime/setup-drill/telemetry.json
+  # Each invocation refreshes telemetry even when the weekly drill is not due.
+  # Default source-staleness and setup-recovery-failed rules apply.
+  # Configure notifications separately; keep runtime history out of Git.

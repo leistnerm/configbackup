@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Rsop xmlns="http://www.microsoft.com/GroupPolicy/Rsop">
+  <CreationTime>2026-10-09T10:00:01</CreationTime>
+  <UserResults>
+    <Name>EXAMPLE\sampleuser</Name>
+    <GPO><Name>Example user baseline &amp; preferences</Name><Enabled>true</Enabled><AccessDenied>false</AccessDenied><ModifiedTime>2026-09-01T09:00:00</ModifiedTime></GPO>
+  </UserResults>
+</Rsop>

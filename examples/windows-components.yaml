@@ -1,0 +1,39 @@
+# Optional read-only LOCAL role configuration. Edit the executable/script paths.
+# A selected but missing role/module is failed/preserved, never an empty success.
+backup:
+  root: C:/ConfigBackup/archive
+options:
+  stop_on_error: false
+tasks:
+  - name: collect-windows-components
+    type: execute
+    enabled: true
+    executable: C:/Approved/Python/python.exe
+    arguments:
+      - C:/ConfigBackup/configbackup-1.0.0/collectors/system/windows_components.py
+      - --component
+      - iis
+      - --component
+      - dns
+      - --component
+      - dhcp
+      - --component
+      - hyperv
+    output_directory: '${CONFIGBACKUP_STAGING}/windows-components'
+    clean_output: true
+    timeout: 1500
+    sections:
+      windows-components/iis: {enabled: true}
+      windows-components/dns: {enabled: false}
+      windows-components/dhcp: {enabled: false}
+      windows-components/hyperv: {enabled: false}
+      # Individual scope patterns can be disabled too:
+      # windows-components/iis/applications/*: {enabled: false}
+  - name: archive-windows-components
+    type: directory
+    enabled: true
+    source: '${CONFIGBACKUP_STAGING}/windows-components'
+    destination: windows-components
+    depends_on: [collect-windows-components]
+    collection_manifest: true
+    storage: filesystem

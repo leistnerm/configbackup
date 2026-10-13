@@ -1,0 +1,19 @@
+# Merge into reporting. No external notifications are sent by these rules.
+reporting:
+  enabled: false
+  sections:
+    attention: true
+  change_policy:
+    rules:
+      - id: disabled-job
+        property: '*/enabled'
+        before: true
+        after: false
+        attention: high
+        description: A captured enabled property changed to false; check the job or service.
+      - id: permissions
+        path: '*permission*'
+        attention: review
+        description: Permission inventory changed; inspect grants and denies in the native diff.
+    approved_fingerprints: []
+    maintenance_windows: []

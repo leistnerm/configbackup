@@ -1,0 +1,24 @@
+# Merge reviewed values into your configuration. Paths are examples.
+backup:
+  root: /srv/configbackup/archive
+options:
+  run_budget_seconds: 3600
+tasks:
+  - name: refresh-recovery-export
+    state_id: setup-recovery-refresh
+    enabled: false
+    type: execute
+    phase: post_run
+    run_on_failure: true
+    required: false
+    executable: python3
+    arguments:
+      - /opt/configbackup/recovery_maintenance.py
+      - refresh
+      - --config
+      - /etc/configbackup/configbackup.yaml
+      - --directory
+      - /srv/configbackup-setup-exports
+    output_directory: /srv/configbackup-staging/setup-refresh
+    clean_output: false
+    timeout: 300

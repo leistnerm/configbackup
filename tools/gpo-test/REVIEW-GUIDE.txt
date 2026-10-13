@@ -1,0 +1,84 @@
+CONFIGBACKUP GPO TEST 1.0.0 - LOCAL REVIEW CHECKLIST
+
+1. Confirm identity before interpreting results
+   Open report.html. Check the computer, process account/SID, elevated flag,
+   Python version, and text encoding. "user" is the account running Python.
+   If you elevated with a different admin account, add your normal account
+   with --user DOMAIN\yourname (PowerShell wrapper: -TargetUser).
+   Additional users need existing RSoP data on this computer. Local admin
+   membership does not guarantee usable RSoP data for every account.
+
+2. Check every scope in every run
+   PASS: all expected configuration files for that scope were successfully
+   collected, validated, and byte-identical across the captured runs.
+   REVIEW: successful exports changed; read the differences.
+   INCOMPLETE: failed, disabled, missing, or invalid output. Two matching
+   errors do not count as deterministic collection. Other scopes still run.
+   Inspect the gpresult command diagnostics for nonzero exit codes, no RSoP
+   data, access denied, timeout, malformed XML, and encoding errors.
+   No results here should be interpreted as proof that no policies apply.
+
+3. Check actual coverage, even with PASS
+   Open the original and normalized XML links. In ComputerResults/UserResults,
+   find a few GPOs and actual settings you already expect on this machine.
+   Inspect applied/denied indicators, security/WMI filtering, source policy,
+   settings values and precedence where Windows includes them. GPO XML node
+   counts include whatever GPO nodes were exported: they are NOT an applied
+   policy count, and a count of zero requires your judgment.
+   The script checks XML structure and hashes. It cannot know which policies
+   your organization expects or whether every policy extension is represented.
+   Do not change policies just to produce test differences.
+
+4. Review determinism correctly
+   Raw XML can change because the root report CreationTime changes. The
+   existing collector removes that field and canonicalizes XML. It preserves
+   policy modification dates, extension data, list order, and whitespace.
+   The report compares raw hashes separately from configuration file hashes.
+   It also checks that normalizing an already-normalized export is stable.
+
+   If normalized files change, inspect the full diffs/*.diff XML path listing.
+   A '-' line belongs to run 1 and a '+' line to the later run. Array indexes
+   preserve element order; ordering differences are visible. Namespace URIs
+   are retained. The HTML preview is limited; the diff file is complete.
+   Changes to policy values, GPO identifiers, filtering, permissions or source
+   policy matter. Timestamp-only or ordering changes inside other fields may
+   be volatile metadata, but ARE NOT automatically ignored. Record the exact
+   XML path and decide locally whether it is meaningful. Do not strip all
+   dates, sort all XML children, or normalize away unexplained differences.
+
+   A background Windows policy refresh can occur during the test. This script
+   does not trigger a refresh. If a difference is unexplained, repeat into a
+   NEW output directory when the machine is quiet and compare locally.
+   PASS establishes observed repeatability over these runs, not an indefinite
+   guarantee. Hashes are local integrity checks, not a signed attestation.
+
+5. If something fails
+   Computer access denied: check that the PowerShell window is elevated.
+   User has no RSoP data: confirm the target account and existing local logon
+   history; another admin account's user scope is not your normal account.
+   Disabled: inspect inherited CONFIGBACKUP_SECTIONS in the launching shell.
+   Encoding failure: the collector writes text using Python's default
+   encoding. Keep the failed report. A separate trial using `py -3 -X utf8
+   test_gpo_collection.py` can distinguish an encoding limitation; record that
+   change, and use the same Python mode when validating actual ConfigBackup.
+   Timeout or XML/permission failure: keep the local diagnostics for your own
+   troubleshooting. Do not use gpupdate or alter policies as part of this test.
+   A missing report after an interruption/disk-full error is an incomplete test.
+
+6. What remains outside this test
+   - Domain-wide GPO definition/SYSVOL backups, unlinked policies, full Intune/
+     MDM coverage, and every client-side extension's internal state.
+   - Whether a policy is correctly enforced by its target application.
+   - Registry collection, archive retention, deletion detection, Git commits,
+     secret scanning, or the full ConfigBackup scheduling pipeline.
+   - Other Windows releases/accounts not actually tested on your machine.
+
+7. Keep and review everything locally
+   Outputs may identify users, groups, domains, servers, shares, scripts, and
+   internal policy settings. The tool neither sends them nor prepares an
+   upload. Reports may contain sensitive policy and identity information.
+   Use a local, nonsynced folder with appropriate existing access controls;
+   files inherit its permissions. Default: %LOCALAPPDATA%\ConfigBackup\GpoTests.
+   Delete the test folders manually when no longer needed under your own
+   retention rules. The script performs no archive cleanup or file deletions
+   outside its disposable temporary export directories.

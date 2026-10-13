@@ -1,0 +1,45 @@
+# Each instance is independent. Adapt paths/identity to Windows, Linux or macOS.
+backup:
+  root: /srv/configbackup/archive
+  include_hostname: false
+git:
+  repository: /srv/configbackup/git
+  push: false
+options:
+  stop_on_error: false
+variables:
+  SCRIPT_ROOT: /opt/configbackup
+  PWSH: pwsh
+tasks:
+  - name: collect-instance-one
+    type: execute
+    phase: pre_backup
+    executable: ${PWSH}
+    arguments: [-NoProfile, -File, '${SCRIPT_ROOT}/collectors/sqlserver/Collect-SqlServerConfiguration.ps1', -SqlInstance, 'SERVER\INSTANCE1']
+    output_directory: '${CONFIGBACKUP_STAGING}/sql-instance-one'
+    clean_output: true
+  - name: collect-instance-two
+    type: execute
+    phase: pre_backup
+    executable: ${PWSH}
+    arguments: [-NoProfile, -File, '${SCRIPT_ROOT}/collectors/sqlserver/Collect-SqlServerConfiguration.ps1', -SqlInstance, 'SERVER\INSTANCE2']
+    output_directory: '${CONFIGBACKUP_STAGING}/sql-instance-two'
+    clean_output: true
+  - name: archive-instance-one
+    type: directory
+    source: '${CONFIGBACKUP_STAGING}/sql-instance-one'
+    destination: sql/SERVER/INSTANCE1
+    depends_on: [collect-instance-one]
+    collection_manifest: true
+    git_canonicalize: true
+    storage: both
+  - name: archive-instance-two
+    type: directory
+    source: '${CONFIGBACKUP_STAGING}/sql-instance-two'
+    destination: sql/SERVER/INSTANCE2
+    depends_on: [collect-instance-two]
+    collection_manifest: true
+    git_canonicalize: true
+    storage: both
+# For SQL authentication, call through a PowerShell wrapper that obtains a
+# PSCredential from your secret provider. Do not put passwords in YAML/arguments.

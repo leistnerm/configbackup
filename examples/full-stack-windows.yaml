@@ -1,0 +1,98 @@
+# Example Windows SQL VM: system inventory + SQL/Agent/SSIS snapshot.
+backup:
+  root: 'C:\ConfigBackup'
+  include_hostname: true
+
+git:
+  repository: 'C:\Repos\Infrastructure'
+  mode: pull_request
+  base_branch: auto
+  branch: 'configbackup/{hostname}'
+  remote_name: origin
+  push: true
+  include_hostname: true
+  path_prefix: configbackup
+  ignore:
+    - '**/*.ispac'
+  pull_request:
+    enabled: true
+    provider: github
+    title: 'ConfigBackup: {hostname}'
+    draft: false
+
+variables:
+  PYTHON: 'py'
+  PWSH: 'C:\Program Files\PowerShell\7\pwsh.exe'
+  CONFIGBACKUP_HOME: 'C:\Admin\ConfigBackup'
+  SQL_SERVER: 'localhost'
+  SYSTEM_STAGING: '${CONFIGBACKUP_STAGING}/system'
+  SQL_STAGING: '${CONFIGBACKUP_STAGING}/sql-server'
+
+retention_policies:
+  long-term:
+    active:
+      mode: tiered
+      min_versions: 5
+      tiers:
+        - interval: all
+          duration_days: 7
+        - interval: weekly
+          duration_days: 90
+        - interval: monthly
+          forever: true
+    deleted:
+      mode: tiered
+      min_versions: 5
+      grace_days: 90
+      tiers:
+        - interval: monthly
+          duration_days: 1825
+        - interval: yearly
+          forever: true
+
+tasks:
+  - name: collect-system
+    type: execute
+    phase: pre_backup
+    executable: ${PYTHON}
+    arguments:
+      - -3
+      - '${CONFIGBACKUP_HOME}\collectors\system\collect_system.py'
+    output_directory: ${SYSTEM_STAGING}
+    clean_output: true
+    timeout: 900
+
+  - name: system-history
+    type: directory
+    collection_manifest: true
+    source: ${SYSTEM_STAGING}
+    destination: system
+    depends_on: [collect-system]
+    storage: both
+    retention_policy: long-term
+
+  - name: collect-sql
+    type: execute
+    phase: pre_backup
+    executable: ${PWSH}
+    arguments:
+      - -NoLogo
+      - -NoProfile
+      - -NonInteractive
+      - -File
+      - '${CONFIGBACKUP_HOME}\collectors\sqlserver\Collect-SqlServerConfiguration.ps1'
+      - -SqlInstance
+      - ${SQL_SERVER}
+    output_directory: ${SQL_STAGING}
+    clean_output: true
+    timeout: 7200
+
+  - name: sql-history
+    type: directory
+    collection_manifest: true
+    git_canonicalize: true
+    source: ${SQL_STAGING}
+    destination: sql
+    depends_on: [collect-sql]
+    storage: both
+    retention_policy: long-term

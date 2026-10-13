@@ -1,0 +1,1285 @@
+#!/usr/bin/env python3
+"""ConfigBackup PostgreSQL configuration/schema collector.
+
+The collector uses PostgreSQL's native command-line clients (psql, pg_dump,
+pg_dumpall) and writes a deterministic current-state tree. ConfigBackup is
+responsible for history/versioning (filesystem, Git, or both).
+
+Security principles:
+- no password command-line/YAML option is provided;
+- libpq authentication (.pgpass, service files, GSSAPI, certificates, etc.) is
+  used normally;
+- pg_dumpall is invoked with --no-role-passwords;
+- known credential-bearing catalog/config values are redacted;
+- raw server config files are only copied with an explicit opt-in because they
+  may contain secrets.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import fnmatch
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any, Iterable
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from completeness import publish, section
+from telemetry import utcnow
+from sections import enabled as section_enabled
+
+COLLECTOR_VERSION = "1.0.0"
+
+
+class CollectorError(RuntimeError):
+    pass
+
+
+def info(message: str) -> None:
+    print(f"[postgresql-collector] {message}")
+
+
+def warn(message: str) -> None:
+    print(f"[postgresql-collector] WARNING: {message}", file=sys.stderr)
+
+
+_OUTPUT_NAMES = {}
+def check_output_name(path: Path) -> None:
+    original = str(path.absolute())
+    key = original.casefold()
+    if key in _OUTPUT_NAMES and _OUTPUT_NAMES[key] != original:
+        raise CollectorError('Case-colliding output paths cannot be safely archived: ' + path.name)
+    _OUTPUT_NAMES[key] = original
+
+
+def stable_text(path: Path, text: str) -> None:
+    check_output_name(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    if text and not text.endswith("\n"):
+        text += "\n"
+    path.write_text(text, encoding="utf-8")
+
+
+def stable_json(path: Path, value: Any) -> None:
+    check_output_name(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False, default=str) + "\n",
+        encoding="utf-8",
+    )
+
+
+def normalize_scalar(value: Any) -> Any:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (list, tuple)):
+        return ";".join(str(x) for x in value)
+    if isinstance(value, dict):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+    return value
+
+
+def stable_csv(path: Path, rows: Iterable[dict[str, Any]], fieldnames: list[str] | None = None) -> None:
+    rows = list(rows)
+    check_output_name(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if fieldnames is None:
+        keys: set[str] = set()
+        for row in rows:
+            keys.update(str(k) for k in row.keys())
+        fieldnames = sorted(keys)
+    # Database catalog row order is not guaranteed unless explicitly sorted.
+    # Canonicalize all CSV rows at the output boundary as an additional guard.
+    rows.sort(key=lambda row: tuple(str(normalize_scalar(row.get(k))) for k in fieldnames))
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore", lineterminator="\n")
+        if fieldnames:
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({k: normalize_scalar(row.get(k)) for k in fieldnames})
+
+
+def short_hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:8]
+
+
+def safe_path_segment(value: str) -> str:
+    """Return a Windows/Linux-safe readable path segment with collision suffix."""
+    safe = re.sub(r'[\x00-\x1f<>:"/\\|?*]', "_", value).strip().rstrip(" .")
+    if not safe:
+        safe = "_"
+    reserved = re.match(r"^(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$", safe) is not None
+    changed = safe != value or reserved
+    if len(safe) > 100:
+        safe = safe[:90]
+        changed = True
+    if changed:
+        safe = f"{safe}__{short_hash(value)}"
+    return safe
+
+
+def split_values(values: list[str] | None) -> list[str]:
+    result: list[str] = []
+    for value in values or []:
+        result.extend(x.strip() for x in value.split(",") if x.strip())
+    return result
+
+
+def matches_any(value: str, patterns: list[str]) -> bool:
+    return any(fnmatch.fnmatchcase(value, pattern) for pattern in patterns)
+
+
+_SECRET_NAME = re.compile(r"(?i)(password|passwd|passphrase|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|conninfo|connstr|connection[_-]?string)")
+_SECRET_KV = re.compile(
+    r"(?i)(\b(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key|access[_-]?key)\s*=\s*)(?:'[^']*'|\"[^\"]*\"|[^\s,;]+)"
+)
+_URI_CREDENTIALS = re.compile(r"(?i)([a-z][a-z0-9+.-]*://[^\s/@:]+:)([^@\s/]+)(@)")
+
+
+def redact_text(value: Any, *, name: str = "") -> Any:
+    if value is None:
+        return value
+    text = str(value)
+    if _SECRET_NAME.search(name):
+        return "<REDACTED>"
+    text = _SECRET_KV.sub(r"\1<REDACTED>", text)
+    text = _URI_CREDENTIALS.sub(r"\1<REDACTED>\3", text)
+    return text
+
+
+def redact_mapping(row: dict[str, Any]) -> dict[str, Any]:
+    clean: dict[str, Any] = {}
+    for key, value in row.items():
+        if isinstance(value, dict):
+            clean[key] = redact_mapping(value)
+        elif isinstance(value, list):
+            clean[key] = [redact_mapping(v) if isinstance(v, dict) else redact_text(v, name=key) for v in value]
+        else:
+            clean[key] = redact_text(value, name=key) if value is not None else None
+    return clean
+
+
+def normalize_dump(text: str) -> str:
+    """Remove only known volatile dump banner timestamps, preserving DDL."""
+    lines: list[str] = []
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").splitlines():
+        if re.match(r"^-- (Started|Completed) on \d{4}-\d{2}-\d{2}", line):
+            continue
+        lines.append(line)
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def quote_ident_pattern(identifier: str) -> str:
+    """Quote one identifier for pg_dump's pattern parser."""
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+class PgTools:
+    def __init__(self, args: argparse.Namespace):
+        self.args = args
+        self.telemetry_failures = []
+        self.bin_dir = Path(args.bin_dir).expanduser() if args.bin_dir else None
+        self.env = os.environ.copy()
+        if args.service:
+            self.env["PGSERVICE"] = args.service
+        if args.host:
+            self.env["PGHOST"] = args.host
+        if args.port:
+            self.env["PGPORT"] = str(args.port)
+        if args.user:
+            self.env["PGUSER"] = args.user
+        if args.sslmode:
+            self.env["PGSSLMODE"] = args.sslmode
+        # Prevent interactive password prompts in unattended runs.
+        self.env.setdefault("PGCONNECT_TIMEOUT", str(args.connect_timeout))
+        self._help_cache: dict[str, str] = {}
+
+    def exe(self, name: str) -> str:
+        candidate = str(self.bin_dir / (name + (".exe" if os.name == "nt" else ""))) if self.bin_dir else shutil.which(name)
+        if not candidate or not Path(candidate).exists():
+            raise CollectorError(f"Required PostgreSQL client tool not found: {name}")
+        return candidate
+
+    def run(
+        self,
+        name: str,
+        arguments: list[str],
+        *,
+        timeout: int | None = None,
+        check: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        cmd = [self.exe(name), *arguments]
+        try:
+            cp = subprocess.run(
+                cmd,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=self.env,
+                timeout=timeout or self.args.command_timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise CollectorError(f"{name} timed out after {timeout or self.args.command_timeout} seconds") from exc
+        if check and cp.returncode != 0:
+            detail = cp.stderr.strip() or cp.stdout.strip() or f"exit code {cp.returncode}"
+            raise CollectorError(f"{name} failed: {detail}")
+        return cp
+
+    def help(self, name: str) -> str:
+        if name not in self._help_cache:
+            self._help_cache[name] = self.run(name, ["--help"], check=False, timeout=30).stdout
+        return self._help_cache[name]
+
+    def version(self, name: str) -> str:
+        cp = self.run(name, ["--version"], check=True, timeout=30)
+        return cp.stdout.strip()
+
+    def psql_rows(self, database: str, query: str) -> list[dict[str, Any]]:
+        query = query.strip().rstrip(";")
+        wrapped = (
+            "SELECT COALESCE(json_agg(row_to_json(_cbq)), '[]'::json)::text "
+            f"FROM ({query}) AS _cbq;"
+        )
+        cp = self.run(
+            "psql",
+            ["-X", "-qAt", "-w", "-v", "ON_ERROR_STOP=1", "-d", database, "-c", wrapped],
+        )
+        text = cp.stdout.strip()
+        if not text:
+            return []
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise CollectorError(f"psql returned invalid JSON for database {database}: {exc}") from exc
+        if not isinstance(value, list):
+            raise CollectorError(f"Unexpected psql JSON shape for database {database}")
+        return sorted((dict(x) for x in value), key=lambda x: json.dumps(x, sort_keys=True, default=str, ensure_ascii=False))
+
+    def psql_scalar(self, database: str, expression: str) -> str:
+        cp = self.run(
+            "psql",
+            ["-X", "-qAt", "-w", "-v", "ON_ERROR_STOP=1", "-d", database, "-c", f"SELECT {expression};"],
+        )
+        return cp.stdout.strip()
+
+    def schema_dump(self, database: str) -> str:
+        args = [
+            "-w",
+            "--schema-only",
+            "--create",
+            "--quote-all-identifiers",
+            f"--lock-wait-timeout={self.args.lock_wait_timeout}",
+        ]
+        dump_help = self.help("pg_dump")
+        if "--no-subscriptions" in dump_help:
+            # Subscription connection strings can contain credentials. A redacted
+            # subscription inventory is collected separately.
+            args.append("--no-subscriptions")
+        if "--restrict-key" in dump_help:
+            # PostgreSQL documents this specifically for repeatable/comparable dumps.
+            pass  # Preserve the native random safety key; canonicalize only comparison copies.
+        args.extend(["--dbname", database])
+        cp = self.run("pg_dump", args, timeout=self.args.dump_timeout)
+        return cp.stdout
+
+    def table_predata_dump(self, database: str, schema: str, table: str) -> str:
+        pattern = f"{quote_ident_pattern(schema)}.{quote_ident_pattern(table)}"
+        args = [
+            "-w",
+            "--schema-only",
+            "--section=pre-data",
+            "--quote-all-identifiers",
+            "--no-owner",
+            "--no-privileges",
+            f"--lock-wait-timeout={self.args.lock_wait_timeout}",
+            "--table",
+            pattern,
+        ]
+        if "--restrict-key" in self.help("pg_dump"):
+            pass  # Preserve the native random safety key; canonicalize only comparison copies.
+        args.extend(["--dbname", database])
+        cp = self.run("pg_dump", args, timeout=self.args.dump_timeout)
+        return cp.stdout
+
+    def globals_dump(self) -> str:
+        help_text = self.help("pg_dumpall")
+        if "--no-role-passwords" not in help_text:
+            raise CollectorError(
+                "pg_dumpall does not support --no-role-passwords; refusing to create globals.sql because role password hashes could be exposed"
+            )
+        args = ["-w", "--globals-only", "--no-role-passwords", "--quote-all-identifiers"]
+        if "--restrict-key" in help_text:
+            pass  # Preserve the native random safety key; canonicalize only comparison copies.
+        args.extend(["--database", self.args.maintenance_db])
+        cp = self.run("pg_dumpall", args, timeout=self.args.dump_timeout)
+        return cp.stdout
+
+
+def record_optional(
+    failures: list[dict[str, str]],
+    section: str,
+    func,
+    *,
+    required: bool = False,
+):
+    try:
+        return func()
+    except Exception as exc:
+        failures.append({"section": section, "error": str(exc), "required": str(required).lower()})
+        warn(f"{section}: {exc}")
+        if required:
+            raise
+        return None
+
+
+def write_rows(root: Path, relative: str, rows: list[dict[str, Any]] | None, *, redact: bool = False) -> None:
+    if rows is None:
+        return
+    if redact:
+        rows = [redact_mapping(x) for x in rows]
+    stable_csv(root / relative, rows)
+
+
+def rows_to_object_files(
+    root: Path,
+    rows: list[dict[str, Any]],
+    category: str,
+    *,
+    schema_key: str = "schema_name",
+    name_key: str = "object_name",
+    definition_key: str = "definition",
+    identity_key: str | None = None,
+) -> None:
+    manifest: list[dict[str, Any]] = []
+    for row in rows:
+        schema = str(row.get(schema_key) or "_")
+        name = str(row.get(name_key) or "_")
+        identity = str(row.get(identity_key) or "") if identity_key else ""
+        filename = safe_path_segment(name)
+        if identity:
+            filename += "__" + short_hash(identity)
+        filename += ".sql"
+        out = root / "objects" / category / safe_path_segment(schema) / filename
+        stable_text(out, str(row.get(definition_key) or ""))
+        manifest.append(
+            {
+                "schema": schema,
+                "name": name,
+                "identity": identity,
+                "file": out.relative_to(root).as_posix(),
+            }
+        )
+    stable_csv(root / "objects" / category / "_manifest.csv", manifest)
+
+
+def sanitize_settings_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for source in rows:
+        row = dict(source)
+        name = str(row.get("name") or "")
+        if "setting" in row:
+            row["setting"] = redact_text(row["setting"], name=name)
+        if "reset_val" in row:
+            row["reset_val"] = redact_text(row["reset_val"], name=name)
+        if "boot_val" in row:
+            row["boot_val"] = redact_text(row["boot_val"], name=name)
+        result.append(row)
+    return result
+
+
+def capture_file(tools, root, relative, failures, label, action, writer=stable_csv, *, group=None):
+    """Certify one query only after it has been read and fully written."""
+    root = Path(root)
+    if not hasattr(tools, 'collection_scopes'): tools.collection_scopes = []
+    if not section_enabled('configuration') or not section_enabled(relative) or (group and not section_enabled(group)):
+        tools.collection_scopes.append(section(root, relative, 'disabled', 'Disabled by configuration'))
+        return None
+    try:
+        value = action()
+        writer(root / relative, value)
+        tools.collection_scopes.append(section(root, relative))
+        return value
+    except Exception as exc:
+        failures.append({'section': label, 'error': str(exc), 'required': 'false'})
+        tools.collection_scopes.append(section(root, relative, 'failed', str(exc)))
+        warn(label + ': query failed; prior snapshot preserved')
+        return None
+
+
+def sanitize_hba_rows(rows):
+    """Redact parsed HBA option values before serialization, including composite names.
+
+    pg_hba_file_rules.options is a PostgreSQL text[] and is transported as JSON,
+    never parsed from PostgreSQL's quoted array text representation.
+    """
+    clean = []
+    for row in rows:
+        copy = dict(row)
+        options = copy.get('options')
+        if options is not None:
+            if not isinstance(options, list) or not all(isinstance(value, str) for value in options):
+                raise CollectorError('HBA options must be a structured text array')
+            copy['options'] = [key + '=' + ('<REDACTED>' if _SECRET_NAME.search(key) else redact_text(value))
+                               if sep else redact_text(option, name=option)
+                               for option in options for key, sep, value in [option.partition('=')]]
+        # Parser errors can echo the malformed authentication line. Preserve only
+        # the presence of a parse error, not potential credentials from that line.
+        if copy.get('error'): copy['error'] = '[HBA PARSE ERROR: REVIEW SOURCE LOCALLY]'
+        clean.append(copy)
+    return clean
+
+
+def collect_cluster(tools: PgTools, root: Path, maintenance_db: str, failures: list[dict[str, str]], args: argparse.Namespace) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    # Connection/version/database discovery are prerequisites. Independent exports
+    # below have their own status and do not prevent database collection.
+    server_rows = tools.psql_rows(maintenance_db, "\n        SELECT current_database() AS maintenance_database,\n               current_user AS connected_user,\n               version() AS version,\n               current_setting('server_version') AS server_version,\n               current_setting('server_version_num') AS server_version_num,\n               current_setting('data_directory') AS data_directory,\n               current_setting('config_file') AS config_file,\n               current_setting('hba_file') AS hba_file,\n               current_setting('ident_file') AS ident_file\n        ")
+    if not server_rows: raise CollectorError('PostgreSQL server did not return server metadata')
+    server = server_rows[0]
+    db_rows = tools.psql_rows(maintenance_db, "\n        SELECT d.datname AS database_name,\n               pg_get_userbyid(d.datdba) AS owner,\n               pg_encoding_to_char(d.encoding) AS encoding,\n               d.datcollate AS collate,\n               d.datctype AS ctype,\n               d.datistemplate AS is_template,\n               d.datallowconn AS allow_connections,\n               d.datconnlimit AS connection_limit,\n               COALESCE(t.spcname, '') AS tablespace,\n               CASE WHEN d.datacl IS NULL THEN NULL ELSE ARRAY(SELECT x::text FROM unnest(d.datacl) x ORDER BY x::text)::text END AS acl\n        FROM pg_database d\n        LEFT JOIN pg_tablespace t ON t.oid = d.dattablespace\n        ORDER BY d.datname\n        ")
+    capture_file(tools, root, 'cluster/server.json', failures, 'cluster.server', lambda: server, stable_json, group='cluster')
+    capture_file(tools, root, 'cluster/databases.csv', failures, 'cluster.databases', lambda: db_rows, group='cluster')
+    capture_file(tools, root, 'cluster/globals.sql', failures, 'cluster.globals', tools.globals_dump, stable_text, group='cluster')
+    specs = [
+        ('roles', 'cluster/roles.csv', 'cluster.roles', '\n        SELECT rolname AS role_name,\n               rolsuper AS superuser,\n               rolinherit AS inherit,\n               rolcreaterole AS create_role,\n               rolcreatedb AS create_database,\n               rolcanlogin AS can_login,\n               rolreplication AS replication,\n               rolconnlimit AS connection_limit,\n               rolvaliduntil::text AS valid_until,\n               rolconfig::text AS role_config\n        FROM pg_roles\n        ORDER BY rolname\n        ', 'roles'),
+        ('memberships', 'cluster/role-memberships.csv', 'cluster.memberships', '\n        SELECT parent.rolname AS granted_role,\n               member.rolname AS member_role,\n               m.admin_option\n        FROM pg_auth_members m\n        JOIN pg_roles parent ON parent.oid = m.roleid\n        JOIN pg_roles member ON member.oid = m.member\n        ORDER BY parent.rolname, member.rolname\n        ', None),
+        ('tablespaces', 'cluster/tablespaces.csv', 'cluster.tablespaces', '\n        SELECT t.spcname AS tablespace_name,\n               pg_get_userbyid(t.spcowner) AS owner,\n               pg_tablespace_location(t.oid) AS location,\n               t.spcoptions::text AS options,\n               CASE WHEN t.spcacl IS NULL THEN NULL ELSE ARRAY(SELECT x::text FROM unnest(t.spcacl) x ORDER BY x::text)::text END AS acl\n        FROM pg_tablespace t\n        ORDER BY t.spcname\n        ', None),
+        ('settings', 'config/pg-settings.csv', 'config.pg_settings', '\n            SELECT name, setting, unit, category, context, vartype, source,\n                   sourcefile, sourceline\n            FROM pg_settings\n            ORDER BY name\n            ', 'settings'),
+        ('file_settings', 'config/pg-file-settings.csv', 'config.pg_file_settings', '\n            SELECT sourcefile, sourceline, seqno, name, setting, applied, error\n            FROM pg_file_settings\n            ORDER BY sourcefile, sourceline, seqno\n            ', 'settings'),
+        ('hba', 'config/pg-hba-file-rules.csv', 'config.pg_hba_file_rules', '\n            SELECT line_number, type, database::text, user_name::text, address,\n                   netmask, auth_method, options, error\n            FROM pg_hba_file_rules\n            ORDER BY line_number\n            ', 'hba'),
+        ('ident', 'config/pg-ident-file-mappings.csv', 'config.pg_ident_file_mappings', '\n            SELECT line_number, map_name, sys_name, pg_username, error\n            FROM pg_ident_file_mappings\n            ORDER BY line_number\n            ', None),
+        ('db_role_settings', 'cluster/database-role-settings.csv', 'cluster.database_role_settings', "\n            SELECT COALESCE(d.datname, '*') AS database_name,\n                   COALESCE(r.rolname, '*') AS role_name,\n                   s.setconfig::text AS settings\n            FROM pg_db_role_setting s\n            LEFT JOIN pg_database d ON d.oid = s.setdatabase\n            LEFT JOIN pg_roles r ON r.oid = s.setrole\n            ORDER BY 1, 2\n            ", 'db_roles'),
+        ('slots', 'replication/slots.csv', 'replication.slots', '\n            SELECT slot_name, plugin, slot_type, database, temporary\n            FROM pg_replication_slots\n            ORDER BY slot_name\n            ', None),
+    ]
+    file_settings = None
+    for name, path, label, query, redact in specs:
+        def read(query=query, redact=redact):
+            rows = tools.psql_rows(maintenance_db, query)
+            if redact == 'settings': return sanitize_settings_rows(rows)
+            if redact == 'hba': return sanitize_hba_rows(rows)
+            if redact in ('roles', 'db_roles'):
+                key = 'role_config' if redact == 'roles' else 'settings'
+                return [{**row, key: redact_text(row.get(key), name=key)} for row in rows]
+            return rows
+        result = capture_file(tools, root, path, failures, label, read, group=path.split('/')[0])
+        if name == 'file_settings': file_settings = result
+    if args.include_sizes and section_enabled('telemetry/sizes'):
+        sizes = record_optional(tools.telemetry_failures, 'inventory.database_sizes', lambda: tools.psql_rows(maintenance_db,
+            "SELECT datname AS database_name, pg_database_size(datname) AS size_bytes FROM pg_database WHERE datallowconn ORDER BY datname"))
+        if sizes is not None: stable_csv(root / 'telemetry' / 'database-sizes.csv', sizes)
+    if args.include_raw_config_files and section_enabled('configuration') and section_enabled('config/raw'):
+        before = len(failures)
+        try: copy_raw_config_files(root, server, file_settings or [], failures)
+        except Exception as exc: failures.append({'section':'raw-config','error':str(exc),'required':'false'})
+        tools.collection_scopes.append(section(root, 'config/raw', 'failed' if len(failures)>before else 'complete',
+                                               'Raw configuration copy incomplete' if len(failures)>before else ''))
+    return server, db_rows
+
+
+def copy_raw_config_files(root: Path, server: dict[str, Any], file_settings: list[dict[str, Any]], failures: list[dict[str, str]]) -> None:
+    paths: set[str] = set()
+    for key in ("config_file", "hba_file", "ident_file"):
+        value = server.get(key)
+        if value:
+            paths.add(str(value))
+    for row in file_settings:
+        if row.get("sourcefile"):
+            paths.add(str(row["sourcefile"]))
+    copied: list[dict[str, str]] = []
+    for value in sorted(paths):
+        source = Path(value)
+        if not source.is_file():
+            failures.append({"section": "config.raw", "error": f"Not locally readable: {value}", "required": "false"})
+            continue
+        out_name = safe_path_segment(source.name) + "__" + short_hash(str(source.resolve(strict=False)))
+        destination = root / "config" / "raw" / out_name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        copied.append({"server_path": value, "file": destination.relative_to(root).as_posix()})
+    stable_csv(root / "config" / "raw" / "_path-map.csv", copied)
+
+
+def select_databases(db_rows: list[dict[str, Any]], args: argparse.Namespace) -> list[dict[str, Any]]:
+    includes = split_values(args.database)
+    excludes = split_values(args.exclude_database)
+    selected: list[dict[str, Any]] = []
+    for row in db_rows:
+        name = str(row["database_name"])
+        if bool(row.get("is_template")) and not args.include_template_databases:
+            continue
+        if includes and not matches_any(name, includes):
+            continue
+        if excludes and matches_any(name, excludes):
+            continue
+        selected.append(row)
+    return selected
+
+
+def query_and_write(
+    tools: PgTools,
+    db: str,
+    root: Path,
+    relative: str,
+    query: str,
+    failures: list[dict[str, str]],
+    section: str,
+    *,
+    redact: bool = False,
+    required: bool = False,
+) -> list[dict[str, Any]] | None:
+    collection_root = root.parents[1]
+    full_relative = root.relative_to(collection_root).as_posix() + '/' + relative
+    return capture_file(tools, collection_root, full_relative, failures, section,
+                        lambda: tools.psql_rows(db, query),
+                        lambda path, rows: write_rows(path.parent, path.name, rows, redact=redact),
+                        group=relative.split('/')[0])
+
+
+def collect_object_files(tools: PgTools, db: str, db_root: Path, server_version_num: int, failures: list[dict[str, str]], args: argparse.Namespace) -> None:
+    if args.skip_object_files:
+        return
+
+    views = record_optional(
+        failures,
+        f"database.{db}.objects.views",
+        lambda: tools.psql_rows(
+            db,
+            """
+            SELECT n.nspname AS schema_name, c.relname AS object_name,
+                   format('CREATE OR REPLACE VIEW %I.%I AS\n%s;', n.nspname, c.relname, pg_get_viewdef(c.oid, true)) AS definition
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relkind = 'v'
+              AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+              AND n.nspname !~ '^pg_toast'
+            ORDER BY n.nspname, c.relname
+            """,
+        ),
+    )
+    if views is not None:
+        rows_to_object_files(db_root, views, "views")
+
+    mviews = record_optional(
+        failures,
+        f"database.{db}.objects.materialized_views",
+        lambda: tools.psql_rows(
+            db,
+            """
+            SELECT n.nspname AS schema_name, c.relname AS object_name,
+                   format('-- Normalized diff representation; schema.sql is authoritative.\nCREATE MATERIALIZED VIEW %I.%I AS\n%s\nWITH NO DATA;',
+                          n.nspname, c.relname, pg_get_viewdef(c.oid, true)) AS definition
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relkind = 'm'
+              AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+              AND n.nspname !~ '^pg_toast'
+            ORDER BY n.nspname, c.relname
+            """,
+        ),
+    )
+    if mviews is not None:
+        rows_to_object_files(db_root, mviews, "materialized-views")
+
+    routines_query = """
+        SELECT n.nspname AS schema_name,
+               p.proname AS object_name,
+               pg_get_function_identity_arguments(p.oid) AS identity,
+               pg_get_functiondef(p.oid) AS definition
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+          AND n.nspname !~ '^pg_toast'
+    """
+    if server_version_num >= 110000:
+        routines_query += " AND p.prokind IN ('f', 'p', 'w')"
+    else:
+        routines_query += " AND NOT p.proisagg"
+    routines_query += " ORDER BY n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)"
+    routines = record_optional(
+        failures,
+        f"database.{db}.objects.routines",
+        lambda: tools.psql_rows(db, routines_query),
+    )
+    if routines is not None:
+        rows_to_object_files(db_root, routines, "routines", identity_key="identity")
+
+    indexes = record_optional(
+        failures,
+        f"database.{db}.objects.indexes",
+        lambda: tools.psql_rows(
+            db,
+            """
+            SELECT ns.nspname AS schema_name, idx.relname AS object_name,
+                   pg_get_indexdef(i.indexrelid, 0, true) || ';' AS definition
+            FROM pg_index i
+            JOIN pg_class idx ON idx.oid = i.indexrelid
+            JOIN pg_class tbl ON tbl.oid = i.indrelid
+            JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+            WHERE ns.nspname NOT IN ('pg_catalog', 'information_schema')
+              AND ns.nspname !~ '^pg_toast'
+            ORDER BY ns.nspname, idx.relname
+            """,
+        ),
+    )
+    if indexes is not None:
+        rows_to_object_files(db_root, indexes, "indexes")
+
+    constraints = record_optional(
+        failures,
+        f"database.{db}.objects.constraints",
+        lambda: tools.psql_rows(
+            db,
+            """
+            SELECT n.nspname AS schema_name,
+                   c.conname AS object_name,
+                   format('ALTER TABLE ONLY %I.%I ADD CONSTRAINT %I %s;',
+                          n.nspname, r.relname, c.conname, pg_get_constraintdef(c.oid, true)) AS definition,
+                   r.relname AS table_name
+            FROM pg_constraint c
+            JOIN pg_class r ON r.oid = c.conrelid
+            JOIN pg_namespace n ON n.oid = r.relnamespace
+            WHERE c.conrelid <> 0
+              AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+              AND n.nspname !~ '^pg_toast'
+            ORDER BY n.nspname, r.relname, c.conname
+            """,
+        ),
+    )
+    if constraints is not None:
+        # Include table name in identity so same-named constraints don't collide.
+        for row in constraints:
+            row["identity"] = f"{row.get('table_name', '')}:{row.get('object_name', '')}"
+        rows_to_object_files(db_root, constraints, "constraints", identity_key="identity")
+
+    triggers = record_optional(
+        failures,
+        f"database.{db}.objects.triggers",
+        lambda: tools.psql_rows(
+            db,
+            """
+            SELECT n.nspname AS schema_name,
+                   t.tgname AS object_name,
+                   pg_get_triggerdef(t.oid, true) || ';' AS definition,
+                   r.relname AS table_name
+            FROM pg_trigger t
+            JOIN pg_class r ON r.oid = t.tgrelid
+            JOIN pg_namespace n ON n.oid = r.relnamespace
+            WHERE NOT t.tgisinternal
+              AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+              AND n.nspname !~ '^pg_toast'
+            ORDER BY n.nspname, r.relname, t.tgname
+            """,
+        ),
+    )
+    if triggers is not None:
+        for row in triggers:
+            row["identity"] = f"{row.get('table_name', '')}:{row.get('object_name', '')}"
+        rows_to_object_files(db_root, triggers, "triggers", identity_key="identity")
+
+    if args.split_table_ddl:
+        tables = record_optional(
+            failures,
+            f"database.{db}.objects.table_list",
+            lambda: tools.psql_rows(
+                db,
+                """
+                SELECT n.nspname AS schema_name, c.relname AS table_name
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE c.relkind IN ('r','p','f')
+                  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+                  AND n.nspname !~ '^pg_toast'
+                ORDER BY n.nspname, c.relname
+                """,
+            ),
+        )
+        if tables is not None:
+            manifest: list[dict[str, str]] = []
+            for table_row in tables:
+                schema = str(table_row["schema_name"])
+                table = str(table_row["table_name"])
+                try:
+                    ddl = tools.table_predata_dump(db, schema, table)
+                except Exception as exc:
+                    failures.append({"section": f"database.{db}.table_ddl.{schema}.{table}", "error": str(exc), "required": "false"})
+                    warn(f"database.{db}.table_ddl.{schema}.{table}: {exc}")
+                    continue
+                out = db_root / "objects" / "tables" / safe_path_segment(schema) / (safe_path_segment(table) + ".sql")
+                stable_text(out, ddl)
+                manifest.append({"schema": schema, "table": table, "file": out.relative_to(db_root).as_posix()})
+            stable_csv(db_root / "objects" / "tables" / "_manifest.csv", manifest)
+
+
+def collect_schedulers(tools: PgTools, db: str, db_root: Path, failures: list[dict[str, str]]) -> None:
+    if not hasattr(tools, "telemetry_failures"): tools.telemetry_failures = []
+    extensions = record_optional(
+        failures,
+        f"database.{db}.scheduler.extensions",
+        lambda: tools.psql_rows(db, "SELECT extname FROM pg_extension WHERE extname IN ('pg_cron','pgagent') ORDER BY extname"),
+    ) or []
+    extnames = {str(r.get("extname")) for r in extensions}
+
+    # pgAgent can be installed as a schema even when extension metadata differs.
+    has_pgagent = record_optional(
+        failures,
+        f"database.{db}.scheduler.pgagent.detect",
+        lambda: tools.psql_scalar(db, "CASE WHEN to_regnamespace('pgagent') IS NULL THEN 'false' ELSE 'true' END"),
+    )
+    if has_pgagent == "true":
+        extnames.add("pgagent")
+
+    if "pg_cron" in extnames:
+        cron_rows = record_optional(
+            failures,
+            f"database.{db}.scheduler.pg_cron",
+            lambda: tools.psql_rows(db, "SELECT * FROM cron.job ORDER BY jobid"),
+        )
+        if cron_rows is not None:
+            # The command is intentionally retained; it is the scheduled configuration.
+            # It may itself contain secrets, so SECURITY.md warns to protect the archive.
+            stable_csv(db_root / "schedulers" / "pg-cron-jobs.csv", cron_rows)
+            if getattr(tools.args, "include_scheduler_history", False) and section_enabled("telemetry/history"):
+                history = record_optional(
+                    tools.telemetry_failures,
+                    f"database.{db}.scheduler.pg_cron.history",
+                    lambda: tools.psql_rows(db, """
+                        SELECT jobid, start_time, end_time, status
+                        FROM cron.job_run_details
+                        WHERE start_time >= now() - interval '60 days'
+                        ORDER BY start_time DESC, jobid
+                        LIMIT 20000
+                    """),
+                )
+                if history is not None:
+                    stable_csv(db_root.parents[1] / "telemetry" / db_root.name / "pg-cron-runs.csv", history)
+
+    if "pgagent" in extnames:
+        if getattr(tools.args, "include_scheduler_history", False) and section_enabled("telemetry/history"):
+            rows = record_optional(tools.telemetry_failures, f"database.{db}.pgagent.history", lambda: tools.psql_rows(db,
+                "SELECT jlgid,jlgjobid,jlgstatus,jlgstart,EXTRACT(epoch FROM jlgduration) AS duration_seconds FROM pgagent.pga_joblog WHERE jlgstart >= now()-interval '60 days' ORDER BY jlgstart DESC LIMIT 20000"))
+            if rows is not None:
+                stable_csv(db_root.parents[1] / 'telemetry' / db_root.name / 'pgagent-runs.csv', rows)
+        for table, out_name in [
+            ("pga_job", "jobs.csv"),
+            ("pga_jobstep", "job-steps.csv"),
+            ("pga_schedule", "schedules.csv"),
+            ("pga_exception", "exceptions.csv"),
+            ("pga_jobclass", "job-classes.csv"),
+        ]:
+            rows = record_optional(
+                failures,
+                f"database.{db}.scheduler.pgagent.{table}",
+                lambda table=table: tools.psql_rows(db, f"SELECT * FROM pgagent.{table} ORDER BY 1"),
+            )
+            if rows is None:
+                continue
+            sanitized: list[dict[str, Any]] = []
+            for row in rows:
+                clean = {}
+                for key, value in row.items():
+                    lower = key.lower()
+                    if lower in {"joblastrun", "jobnextrun", "jobchanged", "jscnextrun", "jobagentid", "joblastresult"}:
+                        continue
+                    clean[key] = json.dumps(value, separators=(',', ':')) if isinstance(value, list) else redact_text(value, name=key)
+                sanitized.append(clean)
+            stable_csv(db_root / "schedulers" / "pgagent" / out_name, sanitized)
+
+
+def collect_database(tools: PgTools, row: dict[str, Any], root: Path, server_version_num: int, failures: list[dict[str, str]], args: argparse.Namespace) -> dict[str, str]:
+    def scoped_optional(group, failures, label, action):
+        filenames = {'user_mapping_options':'user-mapping-options.csv', 'publications':'publications.csv', 'subscriptions':'subscriptions.csv'}
+        relative = 'databases/' + safe_db + '/' + group + '/' + filenames[label.rsplit('.',1)[-1]]
+        if not section_enabled('configuration') or not section_enabled(group) or not section_enabled(relative):
+            tools.collection_scopes.append(section(root, relative, 'disabled', 'Disabled by configuration'))
+            return None
+        return record_optional(failures,label,action)
+    db = str(row["database_name"])
+    safe_db = safe_path_segment(db)
+    db_root = root / "databases" / safe_db
+    db_root.mkdir(parents=True, exist_ok=True)
+    capture_file(tools, root, 'databases/' + safe_db + '/database.json', failures, f'database.{db}.identity', lambda: row, stable_json, group='inventory')
+
+    schema_path = 'databases/' + safe_db + '/schema.sql'
+    if not args.skip_schema_dump and section_enabled('schema') and section_enabled(schema_path):
+        schema_sql = tools.schema_dump(db)  # A schema failure preserves the entire previous database.
+        stable_text(db_root / "schema.sql", schema_sql)
+        tools.collection_scopes.append(section(root, schema_path))
+    else: tools.collection_scopes.append(section(root, schema_path, 'disabled', 'Schema collection disabled'))
+
+    query_and_write(
+        tools,
+        db,
+        db_root,
+        "inventory/extensions.csv",
+        """
+        SELECT e.extname AS extension_name, e.extversion AS version,
+               n.nspname AS schema_name, e.extrelocatable AS relocatable
+        FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace
+        ORDER BY e.extname
+        """,
+        failures,
+        f"database.{db}.extensions",
+        required=True,
+    )
+    query_and_write(
+        tools,
+        db,
+        db_root,
+        "inventory/schemas.csv",
+        """
+        SELECT n.nspname AS schema_name, pg_get_userbyid(n.nspowner) AS owner, CASE WHEN n.nspacl IS NULL THEN NULL ELSE ARRAY(SELECT x::text FROM unnest(n.nspacl) x ORDER BY x::text)::text END AS acl
+        FROM pg_namespace n
+        WHERE n.nspname !~ '^pg_toast'
+        ORDER BY n.nspname
+        """,
+        failures,
+        f"database.{db}.schemas",
+    )
+    query_and_write(
+        tools,
+        db,
+        db_root,
+        "inventory/tables.csv",
+        """
+        SELECT n.nspname AS schema_name,
+               c.relname AS object_name,
+               CASE c.relkind WHEN 'r' THEN 'table' WHEN 'p' THEN 'partitioned table'
+                    WHEN 'f' THEN 'foreign table' WHEN 'v' THEN 'view'
+                    WHEN 'm' THEN 'materialized view' WHEN 'S' THEN 'sequence' ELSE c.relkind::text END AS object_type,
+               pg_get_userbyid(c.relowner) AS owner,
+               COALESCE(t.spcname, '') AS tablespace,
+               c.relpersistence AS persistence,
+               c.relrowsecurity AS row_security,
+               c.relforcerowsecurity AS force_row_security
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        LEFT JOIN pg_tablespace t ON t.oid = c.reltablespace
+        WHERE c.relkind IN ('r','p','f','v','m','S')
+          AND n.nspname NOT IN ('pg_catalog','information_schema')
+          AND n.nspname !~ '^pg_toast'
+        ORDER BY n.nspname, c.relname
+        """,
+        failures,
+        f"database.{db}.tables",
+    )
+    query_and_write(
+        tools,
+        db,
+        db_root,
+        "inventory/columns.csv",
+        """
+        SELECT table_schema, table_name, ordinal_position, column_name,
+               data_type, udt_schema, udt_name, is_nullable, column_default,
+               collation_name
+        FROM information_schema.columns
+        WHERE table_schema NOT IN ('pg_catalog','information_schema')
+        ORDER BY table_schema, table_name, ordinal_position
+        """,
+        failures,
+        f"database.{db}.columns",
+    )
+    query_and_write(
+        tools,
+        db,
+        db_root,
+        "inventory/partitions.csv",
+        """
+        SELECT pn.nspname AS parent_schema, p.relname AS parent_table,
+               cn.nspname AS child_schema, c.relname AS child_table,
+               pg_get_expr(c.relpartbound, c.oid, true) AS partition_bound
+        FROM pg_inherits i
+        JOIN pg_class p ON p.oid = i.inhparent
+        JOIN pg_namespace pn ON pn.oid = p.relnamespace
+        JOIN pg_class c ON c.oid = i.inhrelid
+        JOIN pg_namespace cn ON cn.oid = c.relnamespace
+        WHERE pn.nspname NOT IN ('pg_catalog','information_schema')
+        ORDER BY pn.nspname, p.relname, i.inhseqno, cn.nspname, c.relname
+        """,
+        failures,
+        f"database.{db}.partitions",
+    )
+    query_and_write(
+        tools,
+        db,
+        db_root,
+        "inventory/sequences.csv",
+        """
+        SELECT schemaname AS schema_name, sequencename AS sequence_name,
+               sequenceowner AS owner, data_type, start_value, min_value,
+               max_value, increment_by, cycle, cache_size
+        FROM pg_sequences
+        WHERE schemaname NOT IN ('pg_catalog','information_schema')
+        ORDER BY schemaname, sequencename
+        """,
+        failures,
+        f"database.{db}.sequences",
+    )
+    query_and_write(
+        tools,
+        db,
+        db_root,
+        "inventory/policies.csv",
+        """
+        SELECT schemaname AS schema_name, tablename AS table_name, policyname AS policy_name,
+               permissive, roles::text, cmd, qual, with_check
+        FROM pg_policies
+        ORDER BY schemaname, tablename, policyname
+        """,
+        failures,
+        f"database.{db}.policies",
+    )
+    query_and_write(
+        tools,
+        db,
+        db_root,
+        "inventory/event-triggers.csv",
+        """
+        SELECT e.evtname AS event_trigger_name, e.evtevent AS event,
+               e.evtenabled AS enabled_mode, e.evttags::text AS tags,
+               n.nspname AS function_schema, p.proname AS function_name
+        FROM pg_event_trigger e
+        JOIN pg_proc p ON p.oid = e.evtfoid
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        ORDER BY e.evtname
+        """,
+        failures,
+        f"database.{db}.event_triggers",
+    )
+    query_and_write(
+        tools,
+        db,
+        db_root,
+        "inventory/languages.csv",
+        """
+        SELECT lanname AS language_name, lanpltrusted AS trusted,
+               pg_get_userbyid(lanowner) AS owner
+        FROM pg_language
+        ORDER BY lanname
+        """,
+        failures,
+        f"database.{db}.languages",
+    )
+    query_and_write(
+        tools,
+        db,
+        db_root,
+        "inventory/foreign-data-wrappers.csv",
+        """
+        SELECT foreign_data_wrapper_name, authorization_identifier, library_name, foreign_data_wrapper_language
+        FROM information_schema.foreign_data_wrappers
+        ORDER BY foreign_data_wrapper_name
+        """,
+        failures,
+        f"database.{db}.fdw",
+    )
+    query_and_write(
+        tools,
+        db,
+        db_root,
+        "inventory/foreign-servers.csv",
+        """
+        SELECT foreign_server_name, authorization_identifier, foreign_data_wrapper_name,
+               foreign_server_type, foreign_server_version
+        FROM information_schema.foreign_servers
+        ORDER BY foreign_server_name
+        """,
+        failures,
+        f"database.{db}.foreign_servers",
+    )
+    user_mapping_options = scoped_optional('inventory',
+        failures,
+        f"database.{db}.user_mapping_options",
+        lambda: tools.psql_rows(
+            db,
+            """
+            SELECT authorization_identifier, foreign_server_name, option_name, option_value
+            FROM information_schema.user_mapping_options
+            ORDER BY authorization_identifier, foreign_server_name, option_name
+            """,
+        ),
+    )
+    if user_mapping_options is not None:
+        for option in user_mapping_options:
+            option_name = str(option.get("option_name") or "")
+            option["option_value"] = redact_text(option.get("option_value"), name=option_name)
+        stable_csv(db_root / "inventory" / "user-mapping-options.csv", user_mapping_options)
+
+    if server_version_num >= 100000:
+        publications = scoped_optional('replication',
+            failures,
+            f"database.{db}.publications",
+            lambda: tools.psql_rows(
+                db,
+                """
+                SELECT pubname AS publication_name, pg_get_userbyid(pubowner) AS owner,
+                       puballtables AS all_tables, pubinsert AS publish_insert,
+                       pubupdate AS publish_update, pubdelete AS publish_delete
+                FROM pg_publication
+                ORDER BY pubname
+                """,
+            ),
+        )
+        if publications is not None:
+            stable_csv(db_root / "replication" / "publications.csv", publications)
+
+        subscriptions = scoped_optional('replication',
+            failures,
+            f"database.{db}.subscriptions",
+            lambda: tools.psql_rows(
+                db,
+                """
+                SELECT subname AS subscription_name, pg_get_userbyid(subowner) AS owner,
+                       subenabled AS enabled, subslotname AS slot_name,
+                       subsynccommit AS synchronous_commit, subpublications::text AS publications,
+                       '<REDACTED>'::text AS connection_info
+                FROM pg_subscription
+                ORDER BY subname
+                """,
+            ),
+        )
+        if subscriptions is not None:
+            stable_csv(db_root / "replication" / "subscriptions.csv", subscriptions)
+
+    if not hasattr(tools, "telemetry_failures"): tools.telemetry_failures = []
+    if args.include_sizes and section_enabled('telemetry/sizes'):
+        relation_sizes = record_optional(
+            tools.telemetry_failures,
+            f"database.{db}.relation_sizes",
+            lambda: tools.psql_rows(
+                db,
+                """
+                SELECT n.nspname AS schema_name, c.relname AS relation_name,
+                       c.relkind, pg_total_relation_size(c.oid) AS total_bytes
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE c.relkind IN ('r','p','m','i')
+                  AND n.nspname NOT IN ('pg_catalog','information_schema')
+                  AND n.nspname !~ '^pg_toast'
+                ORDER BY n.nspname, c.relname
+                """,
+            ),
+        )
+        if relation_sizes is not None:
+            stable_csv(root / "telemetry" / safe_db / "relation-sizes.csv", relation_sizes)
+
+    query_and_write(tools, db, db_root, 'inventory/table-grants.csv',
+        "SELECT grantor,grantee,table_catalog,table_schema,table_name,privilege_type,is_grantable,with_hierarchy FROM information_schema.table_privileges ORDER BY table_schema,table_name,grantee,privilege_type,grantor", failures, f'database.{db}.table_grants')
+    query_and_write(tools, db, db_root, 'inventory/column-grants.csv',
+        "SELECT grantor,grantee,table_schema,table_name,column_name,privilege_type,is_grantable FROM information_schema.column_privileges ORDER BY table_schema,table_name,column_name,grantee,privilege_type", failures, f'database.{db}.column_grants')
+    query_and_write(tools, db, db_root, 'inventory/dependencies.csv',
+        "SELECT pg_describe_object(classid,objid,objsubid) AS object_identity, pg_describe_object(refclassid,refobjid,refobjsubid) AS referenced_identity, deptype FROM pg_depend WHERE objid IN (SELECT oid FROM pg_class WHERE relnamespace IN (SELECT oid FROM pg_namespace WHERE nspname NOT IN ('pg_catalog','information_schema') AND nspname !~ '^pg_toast')) ORDER BY 1,2,3", failures, f'database.{db}.dependencies')
+    for group, skip, action in (
+        ('objects', args.skip_object_files, lambda: collect_object_files(tools, db, db_root, server_version_num, failures, args)),
+        ('schedulers', args.skip_schedulers, lambda: collect_schedulers(tools, db, db_root, failures))):
+        scope = 'databases/' + safe_db + '/' + group
+        if skip or not section_enabled(group) or not section_enabled(scope):
+            tools.collection_scopes.append(section(root, scope, 'disabled', 'Disabled by configuration')); continue
+        before = len(failures)
+        try: action()
+        except Exception as exc: failures.append({'section': f'database.{db}.{group}', 'error':str(exc), 'required':'false'})
+        tools.collection_scopes.append(section(root, scope, 'failed' if len(failures)>before else 'complete',
+                                               'Subsection collection incomplete' if len(failures)>before else ''))
+
+    known = {item['path'] for item in tools.collection_scopes}
+    for candidate in [db_root/'inventory/user-mapping-options.csv', db_root/'replication/publications.csv', db_root/'replication/subscriptions.csv']:
+        rel = candidate.relative_to(root).as_posix()
+        if candidate.is_file() and rel not in known: tools.collection_scopes.append(section(root, rel))
+    for item in failures:
+        if item['section'] == f'database.{db}.user_mapping_options': missing = 'inventory/user-mapping-options.csv'
+        elif item['section'] == f'database.{db}.publications': missing = 'replication/publications.csv'
+        elif item['section'] == f'database.{db}.subscriptions': missing = 'replication/subscriptions.csv'
+        else: continue
+        rel = 'databases/' + safe_db + '/' + missing
+        if rel not in known: tools.collection_scopes.append(section(root, rel, 'failed', item['error']))
+
+    if getattr(args, 'extension_adapter', []):
+        from extension_adapters import collect as collect_adapters
+        collect_adapters(tools, db, root, 'databases/' + safe_db, args.extension_adapter, failures, capture_file, redact_text)
+
+    if getattr(args, 'include_performance', False) and section_enabled('telemetry/performance'):
+        telemetry_failures=[]
+        queries={'database-stats': 'SELECT datname,numbackends,xact_commit,xact_rollback,blks_read,blks_hit,temp_bytes,deadlocks,blk_read_time,blk_write_time,stats_reset FROM pg_stat_database WHERE datname=current_database()'}
+        if server_version_num>=160000:queries['io']='SELECT * FROM pg_stat_io'
+        extension=record_optional(telemetry_failures,'pg_stat_statements.detect',lambda: tools.psql_rows(db,"SELECT extname FROM pg_extension WHERE extname='pg_stat_statements'"))
+        if extension:queries['statements']='SELECT userid,dbid,queryid,calls,rows,shared_blks_hit,shared_blks_read,shared_blks_written,temp_blks_read,temp_blks_written FROM pg_stat_statements'
+        for name,query in queries.items():
+            rows=record_optional(telemetry_failures,name,lambda q=query:tools.psql_rows(db,q))
+            if rows is not None:stable_csv(root/'telemetry'/safe_db/(name+'.csv'),rows)
+        stable_json(root/'telemetry'/safe_db/'collection-status.json',{'failures':telemetry_failures})
+    if getattr(args, 'include_health', False) and section_enabled('telemetry/health'):
+        from pg_health import collect_health
+        collect_health(tools, db, root / 'telemetry' / safe_db / 'health.json')
+    return {"database": db, "directory": safe_db}
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Collect deterministic PostgreSQL configuration/schema state for ConfigBackup."
+    )
+    parser.add_argument("--output", help="Output directory; defaults to CONFIGBACKUP_OUTPUT")
+    parser.add_argument("--host", help="PostgreSQL host (or use libpq environment/service configuration)")
+    parser.add_argument("--port", type=int, help="PostgreSQL port")
+    parser.add_argument("--user", help="PostgreSQL user")
+    parser.add_argument("--service", help="libpq service name")
+    parser.add_argument("--sslmode", help="libpq sslmode")
+    parser.add_argument("--maintenance-db", default="postgres", help="Database used for cluster-level queries (default: postgres)")
+    parser.add_argument("--database", action="append", help="Database name/pattern; repeat or comma-separate. Default: all connectable non-template DBs")
+    parser.add_argument("--exclude-database", action="append", help="Database name/pattern to exclude; repeat or comma-separate")
+    parser.add_argument("--include-template-databases", action="store_true")
+    parser.add_argument("--bin-dir", help="Directory containing psql/pg_dump/pg_dumpall")
+    parser.add_argument("--skip-schema-dump", action="store_true", help="Skip authoritative pg_dump --schema-only files")
+    parser.add_argument("--skip-object-files", action="store_true", help="Skip per-object diff-oriented SQL files")
+    parser.add_argument("--split-table-ddl", action="store_true", help="Also run pg_dump pre-data per table (more expensive)")
+    parser.add_argument('--extension-adapter', action='append', choices=('postgres_fdw','postgis','pg_partman'), default=[], help='Optional read-only extension metadata (repeatable; no extension installation)')
+    parser.add_argument("--skip-schedulers", action="store_true", help="Skip pg_cron/pgAgent discovery")
+    parser.add_argument("--include-scheduler-history", action="store_true", help="Export rolling pg_cron run durations (volatile; keep out of Git history)")
+    parser.add_argument("--include-performance", action="store_true", help="Collect optional volatile statistics outside configuration manifests")
+    parser.add_argument('--include-health', action='store_true', help='Optional capacity, vacuum, transactions, replication and recovery telemetry')
+    parser.add_argument('--health-timeout', type=int, default=15)
+    parser.add_argument('--bloat-table', action='append', default=[], help='Optional schema.table for pgstattuple_approx; extension must already exist')
+    parser.add_argument("--include-sizes", action="store_true", help="Include volatile database/relation size inventories")
+    parser.add_argument(
+        "--include-raw-config-files",
+        action="store_true",
+        help="Copy locally readable raw PostgreSQL config files. WARNING: raw config may contain secrets.",
+    )
+    parser.add_argument("--connect-timeout", type=int, default=15)
+    parser.add_argument("--command-timeout", type=int, default=120)
+    parser.add_argument("--dump-timeout", type=int, default=3600)
+    parser.add_argument('--read-only-access',action='store_true',help='Require pg_monitor, pg_read_all_data and BYPASSRLS instead of superuser; failed protected sections remain preserved')
+    parser.add_argument("--lock-wait-timeout", default="30s", help="pg_dump lock wait timeout (default: 30s)")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {COLLECTOR_VERSION}")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    output_value = args.output or os.environ.get("CONFIGBACKUP_OUTPUT")
+    if not output_value:
+        print("ERROR: --output or CONFIGBACKUP_OUTPUT is required", file=sys.stderr)
+        return 2
+    root = Path(output_value).expanduser().absolute()
+    root.mkdir(parents=True, exist_ok=True)
+    if any(root.iterdir()):
+        print("ERROR: Output directory must be empty; use clean_output: true", file=sys.stderr)
+        return 1
+    publish(root, [], finalized=False)
+    sections = []
+
+    failures: list[dict[str, str]] = []
+    tools = PgTools(args)
+    tools.collection_scopes = sections
+    try:
+        tool_versions = {}
+        for name in ('psql', 'pg_dump', 'pg_dumpall'):
+            try: tool_versions[name] = tools.version(name)
+            except Exception: tool_versions[name] = 'unavailable; individual exports report failures' 
+        visibility = tools.psql_rows(args.maintenance_db, "SELECT rolsuper, rolbypassrls, pg_has_role(current_user,'pg_monitor','USAGE') AS monitor, pg_has_role(current_user,'pg_read_all_data','USAGE') AS data_reader FROM pg_roles WHERE rolname=current_user") if args.read_only_access else tools.psql_rows(args.maintenance_db, "SELECT rolsuper FROM pg_roles WHERE rolname=current_user")
+        truth=lambda value:str(value).lower() in ('true','t','1')
+        if not visibility or not truth(visibility[0]['rolsuper']):
+            if not args.read_only_access or not visibility or not all(truth(visibility[0][key]) for key in ('rolbypassrls','monitor','data_reader')):
+                raise CollectorError('Full visibility requires superuser, or --read-only-access with pg_monitor, pg_read_all_data and BYPASSRLS; hidden objects must not be certified')
+        server, db_rows = collect_cluster(tools, root, args.maintenance_db, failures, args)
+        server_version_num = int(server.get("server_version_num") or 0)
+        selected = select_databases(db_rows, args)
+        if not selected:
+            raise CollectorError("No connectable databases matched the configured selection")
+
+        if args.include_health and section_enabled('telemetry/health'):
+            from pg_health import collect_health
+            collect_health(tools,args.maintenance_db,root/'telemetry/cluster-health.json',cluster_only=True)
+        database_map: list[dict[str, str]] = []
+        for row in selected:
+            db = str(row["database_name"])
+            info(f"Collecting database {db}")
+            before = len(failures)
+            scope_checkpoint = len(sections)
+            scope = "databases/" + safe_path_segment(db)
+            if not section_enabled('configuration') or not section_enabled(scope):
+                sections.append(section(root,scope,'disabled','Disabled by configuration'));continue
+            try:
+                if not bool(row.get("allow_connections")):
+                    raise CollectorError("Database disallows connections; previous snapshot preserved")
+                if args.read_only_access:
+                    # A role can inherit writes through PUBLIC even when this
+                    # project's provisioning script only grants reads.
+                    unsafe=tools.psql_rows(db,"""
+                        SELECT 'schema_create' AS kind,nspname AS name FROM pg_namespace
+                        WHERE nspname !~ '^pg_temp_' AND has_schema_privilege(current_user,oid,'CREATE')
+                        UNION ALL
+                        SELECT 'table_write',n.nspname||'.'||c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+                        WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname<>'information_schema' AND c.relkind IN ('r','p','v','f')
+                        AND (has_table_privilege(c.oid,'INSERT') OR has_table_privilege(c.oid,'UPDATE') OR has_table_privilege(c.oid,'DELETE') OR has_table_privilege(c.oid,'TRUNCATE'))
+                        UNION ALL
+                        SELECT 'privileged_function',n.nspname||'.'||p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+                        WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND p.prosecdef AND has_function_privilege(p.oid,'EXECUTE')
+                        UNION ALL
+                        SELECT 'sequence_write',n.nspname||'.'||c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+                        WHERE c.relkind='S' AND n.nspname NOT LIKE 'pg_%' AND (has_sequence_privilege(c.oid,'USAGE') OR has_sequence_privilege(c.oid,'UPDATE'))
+                        ORDER BY kind,name
+                    """)
+                    if unsafe:raise CollectorError('Read-only permission audit found inherited write or privileged-function access: '+', '.join(x['kind']+':'+x['name'] for x in unsafe[:10]))
+                database_map.append(collect_database(tools, row, root, server_version_num, failures, args))
+            except Exception as exc:
+                failures.append({'section': scope, 'error': str(exc), 'required': 'true'})
+                warn(f"{db}: collection failed; previous archived database preserved")
+                del sections[scope_checkpoint:]
+                sections.append(section(root, scope, 'failed', 'Database preflight/schema collection incomplete'))
+            publish(root, sections, finalized=False)
+        stable_json(root / 'telemetry' / 'collection-status.json', {'observed_at': utcnow(), 'failures': tools.telemetry_failures})
+        stable_json(root / 'telemetry' / 'history-coverage.json', {'observed_at': utcnow(), 'lookback_days': 60,
+                    'row_limit': 20000, 'failures': tools.telemetry_failures, 'complete': False,
+                    'note': 'Bounded database histories; absence alone is not proof of a missed execution'})
+        stable_csv(root / "database-map.csv", database_map)
+
+        collector_meta = {
+            "collector": "ConfigBackup PostgreSQL collector",
+            "collector_version": COLLECTOR_VERSION,
+            "server_version": server.get("server_version"),
+            "server_version_num": server.get("server_version_num"),
+            "maintenance_database": args.maintenance_db,
+            "selected_databases": [x["database"] for x in database_map],
+            "tool_versions": tool_versions,
+            "options": {
+                "skip_schema_dump": args.skip_schema_dump,
+                "skip_object_files": args.skip_object_files,
+                "split_table_ddl": args.split_table_ddl,
+                "skip_schedulers": args.skip_schedulers,
+                "include_sizes": args.include_sizes,
+                "include_raw_config_files": args.include_raw_config_files,
+                "extension_adapters": args.extension_adapter,
+            },
+            "warnings": failures,
+        }
+        stable_json(root / "collector.json", collector_meta)
+        sections.append(section(root, 'database-map.csv'))
+        sections.append(section(root, 'collector.json'))
+        publish(root, sections)
+        info(f"Collected {len(database_map)} database(s) into {root}; {len(failures)} warning(s)")
+        return 6 if failures else 0
+    except KeyboardInterrupt:
+        return 130
+    except Exception as exc:
+        # Write deterministic failure details if possible, then fail hard so the
+        # dependent ConfigBackup task is skipped and deletion state cannot advance.
+        try:
+            failures.append({"section": "fatal", "error": str(exc), "required": "true"})
+            stable_json(root / "collector-error.json", {"collector_version": COLLECTOR_VERSION, "failures": failures})
+        except Exception:
+            pass
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

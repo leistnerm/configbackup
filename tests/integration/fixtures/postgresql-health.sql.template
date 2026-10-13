@@ -1,0 +1,7 @@
+-- Select a NEW disposable database explicitly before running. Requires pgstattuple installed.
+CREATE EXTENSION pgstattuple;
+CREATE TABLE public.health_fixture(id int PRIMARY KEY,payload text) WITH (autovacuum_enabled=false);
+INSERT INTO public.health_fixture SELECT x,repeat('payload',100) FROM generate_series(1,12000) x;
+ANALYZE public.health_fixture;
+DELETE FROM public.health_fixture WHERE id%2=0;
+-- Collect with --include-health --bloat-table public.health_fixture, then drop the disposable DB.

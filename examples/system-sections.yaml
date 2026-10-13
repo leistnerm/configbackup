@@ -1,0 +1,45 @@
+backup:
+  root: /var/backups/configbackup
+options: {stop_on_error: false}
+tasks:
+  - name: collect-system
+    type: execute
+    enabled: true
+    executable: python3  # Windows: python
+    arguments:
+      - collectors/system/collect_system.py
+      - --include-performance
+      - --include-network-runtime
+      - --include-drive-health
+      # Windows additions:
+      # - --registry-config
+      # - examples/windows-registry.yaml
+      # - --include-rsop
+      # - --rsop-user
+      # - 'DOMAIN\someuser'
+    output_directory: '${CONFIGBACKUP_STAGING}/system'
+    clean_output: true
+    sections:
+      storage/lvm: {enabled: true}
+      storage/mdraid: {enabled: true}
+      storage/zfs-topology: {enabled: true}
+      storage/zfs-properties: {enabled: true}
+      storage/xfs: {enabled: true}
+      hardware/firmware: {enabled: true}
+      hardware/drivers: {enabled: true}
+      kernel/module-parameters: {enabled: true}
+      registry: {enabled: true}
+      policy/rsop/user: {enabled: true}
+      telemetry/storage: {enabled: true}
+      telemetry/network: {enabled: true}
+      telemetry/drives: {enabled: true}
+      firewall: {enabled: true}
+      shares: {enabled: true}
+  - name: archive-system
+    type: directory
+    enabled: true
+    source: '${CONFIGBACKUP_STAGING}/system'
+    destination: system
+    depends_on: [collect-system]
+    collection_manifest: true
+    storage: filesystem

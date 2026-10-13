@@ -1,0 +1,7 @@
+GPO harness coverage
+
+42 offline fixtures exercise XML normalization, ordered changes, independent
+scope failures, timeouts, manifest integrity, report escaping and path handling.
+Live Windows gpresult exports, domain policies, account/elevation behavior,
+encoding, filesystem permissions and Windows PowerShell 5.1 remain unverified.
+The harness does not invoke the backup engine or certify archive recovery.

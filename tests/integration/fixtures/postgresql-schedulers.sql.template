@@ -1,0 +1,8 @@
+-- DISPOSABLE DATABASE ONLY. Requires installed extensions/preload configuration.
+CREATE EXTENSION pg_cron;
+CREATE EXTENSION pg_stat_statements;
+CREATE EXTENSION pgagent;
+SELECT cron.schedule('cb_cron_test','* * * * *','SELECT 1;');
+INSERT INTO pgagent.pga_job(jobjclid,jobname,jobdesc,jobenabled) SELECT jclid,'cb_agent_test','Determinism and calendar test',true FROM pgagent.pga_jobclass LIMIT 1;
+INSERT INTO pgagent.pga_jobstep(jstjobid,jstname,jstkind,jstcode,jstdbname,jstonerror) SELECT jobid,'select-one','s','SELECT 1;','{{DATABASE}}','f' FROM pgagent.pga_job WHERE jobname='cb_agent_test';
+INSERT INTO pgagent.pga_schedule(jscjobid,jscname,jscstart,jscminutes,jschours,jscweekdays,jscmonthdays,jscmonths) SELECT jobid,'every-minute',now()-interval '1 day',array_fill(true,ARRAY[60]),array_fill(true,ARRAY[24]),array_fill(true,ARRAY[7]),array_fill(true,ARRAY[32]),array_fill(true,ARRAY[12]) FROM pgagent.pga_job WHERE jobname='cb_agent_test';

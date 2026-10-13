@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Rsop xmlns="http://www.microsoft.com/GroupPolicy/Rsop" xmlns:p="urn:synthetic-policy-extension">
+  <CreationTime>2026-10-09T10:00:01</CreationTime>
+  <ComputerResults>
+    <Name>LAB-PC</Name>
+    <GPO>
+      <Name>Example workstation baseline</Name>
+      <Identifier>{00000000-0000-0000-0000-000000000001}</Identifier>
+      <Enabled>true</Enabled><AccessDenied>false</AccessDenied>
+      <FilterAllowed>true</FilterAllowed><ModifiedTime>2026-09-01T09:00:00</ModifiedTime>
+      <ExtensionData><Extension><p:Policy name="Sample setting" state="Enabled"><p:Value>1</p:Value><p:CreationTime>2026-08-01</p:CreationTime></p:Policy></Extension></ExtensionData>
+      <OrderedValues><Value>first</Value><Value>second</Value></OrderedValues>
+    </GPO>
+    <GPO><Name>Example filtered policy</Name><AccessDenied>true</AccessDenied><FilterAllowed>false</FilterAllowed></GPO>
+  </ComputerResults>
+</Rsop>
