@@ -146,6 +146,43 @@ class SensitiveCollectionTests(unittest.TestCase):
         config['git']={'sensitive_data':{'enabled':True}}
         with patch('configure.choice',return_value='Disable sensitive publication'):policy.git_wizard(config,lambda _: '')
         self.assertFalse(config['git']['sensitive_data']['enabled'])
+    def test_parameter_sections_require_separate_collection_and_git_approvals(self):
+        project='instance/sensitive-ssis/project-parameters.csv'
+        package='instance/sensitive-ssis/package-parameters.csv'
+        policy.validate_sections([project,package],policy.SQL_SECTIONS)
+        with patch.dict(os.environ,{policy.ENVIRONMENT:json.dumps([project])}):
+            self.assertTrue(policy.requested(project));self.assertFalse(policy.requested(package));self.assertFalse(policy.requested(SCOPE))
+        cfg={'sensitive_data':{'enabled':True,'private_repository':True,'sections':[{'task':'snapshot','section':project}]}}
+        self.assertTrue(policy.git_approved(cfg,'snapshot',project));self.assertFalse(policy.git_approved(cfg,'snapshot',package))
+
+    def test_parameter_failure_preserves_archive_git_and_allows_siblings(self):
+        scopes=[SCOPE,'instance/sensitive-ssis/project-parameters.csv','instance/sensitive-ssis/package-parameters.csv']
+        cfg=self.config(True);cfg['git']['sensitive_data']['sections']=[{'task':'snapshot','section':p} for p in scopes]
+        def capture(failed=None,generation=0):
+            self.capture(healthy=str(generation));root=self.root/'source';entries=[]
+            for scope in scopes:
+                (root/scope).write_text('password=SYNTHETIC-GENERATION-'+str(generation))
+                entry=section(root,scope,'failed' if scope==failed else 'complete');entry['sensitive']=True;entries.append(entry)
+            publish(root,entries+[section(root,'instance/ssis')])
+        def archive_bytes():
+            return {p.relative_to(self.root/'archive').as_posix():p.read_bytes() for p in (self.root/'archive').rglob('*') if p.is_file() and '.csv' in p.name}
+        capture();self.assertEqual(self.run_engine(cfg),0)
+        head=lambda:subprocess.check_output(['git','rev-parse','HEAD'],cwd=self.root/'git')
+        first=head();self.assertEqual(self.run_engine(cfg),0);self.assertEqual(first,head())
+        for n,failed in enumerate(scopes[1:],1):
+            before=(self.root/'git/server'/failed).read_bytes();archives=archive_bytes()
+            capture(failed,n);self.assertNotEqual(self.run_engine(cfg),0)
+            self.assertEqual(before,(self.root/'git/server'/failed).read_bytes())
+            old_failed={k:v for k,v in archives.items() if Path(k).name.startswith(Path(failed).stem+'.')}
+            new_failed={k:v for k,v in archive_bytes().items() if Path(k).name.startswith(Path(failed).stem+'.')}
+            self.assertTrue(old_failed);self.assertEqual(old_failed,new_failed)
+            for scope in scopes:
+                if scope!=failed:self.assertIn(str(n),(self.root/'git/server'/scope).read_text())
+            result=reporting.capture({'id':'demo','path':str(self.root/'source'),'include_values':True},{'include_values':True})
+            self.assertNotIn('SYNTHETIC-GENERATION',json.dumps(result))
+        capture(generation=3);self.assertEqual(self.run_engine(cfg),0)
+        for scope in scopes:self.assertIn('3',(self.root/'git/server'/scope).read_text())
+
     @unittest.skipUnless(shutil.which('pwsh'),'PowerShell unavailable')
     def test_actual_powershell_sensitive_recovery_isolation(self):
         script=Path(__file__).parent/'integration/Test-SensitiveCollection.ps1'

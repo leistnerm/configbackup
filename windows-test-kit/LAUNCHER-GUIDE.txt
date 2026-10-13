@@ -1,5 +1,5 @@
-CONFIGBACKUP SAFE WINDOWS LAUNCHER - KIT 1.1.0
-Prepared 13 October 2026. Application 1.1.0; pinned GPO harness 1.0.0.
+CONFIGBACKUP SAFE WINDOWS LAUNCHER - KIT 1.2.0
+Prepared 13 October 2026. Application 1.2.0; pinned GPO harness 1.0.0.
 
 QUICK START
 1. Extract the entire ZIP to a local, nonsynced folder. Keep all files together.
@@ -77,10 +77,10 @@ WHAT THE TESTS DO
 - Verify listed kit files, pinned inner ZIP hashes, safe ZIP paths and CRCs;
   extract fresh copies. Checksums detect corruption, not signed identity.
 - Recheck Python, PyYAML, ruamel.yaml, IANA time-zone data, Git and Windows capabilities.
-- Run 276 selected synthetic application checks covering partial-snapshot
+- Run 278 selected synthetic application checks covering partial-snapshot
   preservation, recovery, deletion scope, local Git/secret blocking, schedules,
   database failure isolation, configuration editing, reports and notifications.
-  Without Git, 252 checks can run; 24 are NOT RUN. Missing required Python packages
+  Without Git, 253 checks can run; 25 are NOT RUN. Missing required Python packages
   skips this stage while independent GPO/component checks remain available.
 - Run 42 GPO fixture tests (41 pass and one expected skip on Windows).
 - Capture effective computer/process-user GPO three times, compare normalized

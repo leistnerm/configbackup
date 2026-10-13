@@ -8,6 +8,7 @@ from pathlib import PurePosixPath
 SQL_SECTIONS = frozenset({
     'instance/scripts/Logins', 'instance/scripts/Credentials', 'instance/scripts/LinkedServers',
     'instance/sensitive-ssis/environment-variables.csv',
+    'instance/sensitive-ssis/project-parameters.csv', 'instance/sensitive-ssis/package-parameters.csv',
 })
 PG_SECTIONS = frozenset({
     'cluster/globals.sql', 'cluster/roles.csv', 'cluster/database-role-settings.csv',

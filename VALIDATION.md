@@ -28,6 +28,6 @@ These features may be available in the code but require testing with the intende
 
 See the individual collector guides for scope and prerequisites. Use a disposable environment for fault injection and schema reconstruction; do not run those tests against production systems. The Windows test kit provides optional local acceptance checks.
 
-## Sensitive exports (1.1)
+## Sensitive exports (1.2)
 
-SQL Server login hash exports and PostgreSQL role hash exports were checked against disposable databases for default exclusion, explicit opt-in and repeat determinism. A synthetic SQL certificate/key fixture verifies the SSIS recovery query and missing-key preservation. Mocked PowerShell and archive/Git fixtures verify that failed recovery preserves prior bytes while normal SSIS sections continue. Real Windows SSISDB recovery, protected credential exports and linked-server password recovery remain unverified. See [sensitive collection](docs/sensitive-collection.md).
+SQL Server login hash exports and PostgreSQL role hash exports were checked against disposable databases for default exclusion, explicit opt-in and repeat determinism. A synthetic SQL certificate/key fixture verifies environment/project/package recovery, current-version filtering, repeat determinism, corrupt-value isolation and missing-key/incomplete-inventory preservation. Mocked PowerShell and archive/Git fixtures verify that failed recovery preserves prior bytes while normal SSIS sections continue. Real Windows SSISDB recovery, protected credential exports and linked-server password recovery remain unverified. See [sensitive collection](docs/sensitive-collection.md).

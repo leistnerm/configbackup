@@ -18,6 +18,8 @@ tasks:
     sensitive_sections:
       - instance/scripts/Logins
       - instance/sensitive-ssis/environment-variables.csv
+      - instance/sensitive-ssis/project-parameters.csv
+      - instance/sensitive-ssis/package-parameters.csv
 
   - name: sql-archive
     type: directory
@@ -50,6 +52,8 @@ Supported sections:
 | `instance/scripts/Credentials` | Credential secrets only where dbatools and the account/platform can export them. Some exports require Windows and elevated privileges. |
 | `instance/scripts/LinkedServers` | Linked-server credentials only where dbatools supports recovery. Permission/platform failure preserves that section. |
 | `instance/sensitive-ssis/environment-variables.csv` | Opt-in recovery of sensitive SSISDB environment variables using the internal environment/certificate layout. See the compatibility limits below. |
+| `instance/sensitive-ssis/project-parameters.csv` | Sensitive project parameter server literals for the current deployed version; references and unrecovered design defaults are labeled. |
+| `instance/sensitive-ssis/package-parameters.csv` | Sensitive package parameter server literals for the current deployed version, including package identity. Independent approval and failure boundary. |
 | `cluster/globals.sql` | PostgreSQL role password hashes: omits `pg_dumpall --no-role-passwords` only for this approval. Requires permission to read the role hashes. |
 | `cluster/roles.csv` | Unredacted role configuration values; does not itself add role password hashes. |
 | `cluster/database-role-settings.csv` | Unredacted database/role settings. |
@@ -78,6 +82,10 @@ git:
         section: instance/scripts/Logins
       - task: sql-archive
         section: instance/sensitive-ssis/environment-variables.csv
+      - task: sql-archive
+        section: instance/sensitive-ssis/project-parameters.csv
+      - task: sql-archive
+        section: instance/sensitive-ssis/package-parameters.csv
 ```
 
 The approval names the **archive task** and exact **manifest section**, not a destination prefix. It applies only to files classified sensitive in that section. Unrelated staged files remain subject to normal secret scanning. Archive expansion limits and invalid/nonregular Git entries remain blocking even for approved sections.
@@ -92,9 +100,23 @@ Normal `instance/ssis` metadata and ISPAC export runs separately from `instance/
 
 The adapter requires sysadmin, the expected `internal.environment_variables` columns, `internal.get_value_by_data_type`, and decryptable `MS_Cert_Env_<environment_id>` certificates. It issues SELECT queries and does not install procedures, alter permissions, change sensitivity flags, replace keys or run packages. These are internal SSISDB structures, not a supported stable Microsoft export API. An incompatible version fails closed. Full Windows SSIS compatibility remains unverified.
 
-This adapter recovers environment variables only. Sensitive project/package parameter defaults, secrets embedded in DPAPI/password-protected DTSX/ISPAC files, external vault contents, SSIS runtime execution values and arbitrary third-party connection managers are not recovered by this adapter. Normal package exports retain their native protection behavior. Do not treat a successful environment export as proof that every package can be restored.
+Environment variables and the two parameter sections have independent approvals and failure boundaries. Secrets embedded in DPAPI/password-protected DTSX/ISPAC files, external vault contents, SSIS runtime execution values and arbitrary third-party connection managers are not recovered by these adapters. Normal package exports retain their native protection behavior. Do not treat a successful environment export as proof that every package can be restored.
 
 Microsoft documents that the ordinary [environment-variable view](https://learn.microsoft.com/en-us/sql/integration-services/system-views/catalog-environment-variables-ssisdb-database) returns NULL for sensitive values, and describes [package protection levels](https://learn.microsoft.com/en-us/sql/integration-services/security/access-control-for-sensitive-data-in-packages). The internal certificate-layout technique is also illustrated in the author's [SSIS environment utility source](https://github.com/PavelPawlowski/SQL-Scripts/blob/master/SSISDB/sp_SSISListEnvironment.sql); ConfigBackup does not install that utility.
+
+## Project and package parameters (1.2)
+
+The parameter adapters read sensitive parameters from `internal.object_parameters` for the current `internal.projects.object_version_lsn`. Project parameters (`object_type=20`) and package parameters (`object_type=30`) are separate sections. Recovery uses the project's `MS_Cert_Proj_<project_id>` certificate and existing keys; no catalog writes, package execution or permission changes are performed.
+
+Each CSV identifies the folder, project, object/package, parameter name, data type and configuration state:
+
+- `server_literal`: a server-configured sensitive literal was decrypted. Empty strings are valid; a NULL decryption fails the entire affected section.
+- `environment_reference`: the variable name is recorded, but its value is not resolved. Enable environment recovery independently if needed; multiple environments can provide different values.
+- `design_default_unrecovered`: no server override is set. A default inside the deployed package is not recovered by this path. This status does not mean the effective value is empty.
+
+A complete manifest certifies this scoped export, not recovery of every effective runtime parameter. Historical deployment versions are excluded. Invalid references, unsupported states, incomplete joined inventories or unreadable literals fail the affected project/package section. Prior archive and Git bytes stay untouched; normal SSIS, environment recovery and the other parameter section continue. A failure in one project currently freezes the whole project-parameter section; isolation is per section, not per individual project.
+
+Microsoft documents the [parameter types and literal/reference states](https://learn.microsoft.com/en-us/sql/integration-services/system-views/catalog-object-parameters-ssisdb-database). The author's [configuration utility](https://github.com/PavelPawlowski/SQL-Scripts/blob/master/SSISDB/sp_SSISCloneConfiguration.sql) illustrates the internal project-certificate layout. These structures are not a stable supported export API. The implementation has passed synthetic SQL encryption tests but remains unverified against real Windows SSISDB versions.
 
 ## Output handling and validation
 
@@ -105,7 +127,7 @@ Tests cover exact opt-in, default redaction, unrelated-secret blocking, destinat
 Disposable integration scripts:
 
 - `tests/integration/postgresql_sensitive.py`: temporary synthetic role; default hash exclusion, opt-in hash export, repeatability and denied-account behavior. Uses existing `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`; requires `--bin-dir`, a new `--output` directory and `--confirm-disposable`.
-- `tests/integration/Test-SensitiveSqlFixture.ps1`: temporary synthetic database and AES key/certificate layout; decryption, repeatability and missing-key preservation. Requires `-ConfirmDisposable` and a new `-OutputDirectory`. Credentials come from `CONFIGBACKUP_TEST_SQL_PASSWORD` or the named `-PasswordEnvironment`. This validates the SQL cryptographic path, not real SSIS installation compatibility.
+- `tests/integration/Test-SensitiveSqlFixture.ps1`: temporary synthetic database and AES key/certificate layout; environment/project/package decryption, current-version filtering, literal/reference/unset handling, repeatability, corrupt-value isolation and missing-key/incomplete-inventory preservation. Requires `-ConfirmDisposable` and a new `-OutputDirectory`. Credentials come from `CONFIGBACKUP_TEST_SQL_PASSWORD` or the named `-PasswordEnvironment`. This validates the SQL cryptographic path, not real SSIS installation compatibility.
 - `tests/integration/Test-SensitiveCollection.ps1`: no server connection; tests the actual PowerShell functions against synthetic result tables, including normal-SSIS continuity after denied/NULL recovery.
 
 Run disposable integration scripts only on isolated test instances. A real Windows SSIS lab must still compare recovered synthetic environment values with their known inputs, test unavailable keys/permissions, repeat captures and verify unchanged normal SSIS output. No Windows or production secrets need to be sent elsewhere for validation.

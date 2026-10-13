@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.0
+
+- Independently approved sensitive SSIS project and package parameter exports.
+- Current-deployment server literal recovery, explicit environment references and unrecovered design-default status.
+- Per-section failure preservation with synthetic encryption, corruption, permission and repeat-determinism checks; live Windows SSISDB remains unverified.
+
 ## 1.1.0
 
 - Explicit per-section sensitive exports with separate private Git publication approval.

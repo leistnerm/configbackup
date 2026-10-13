@@ -14,7 +14,7 @@
     dbatools instance scripts by default.
 
 .NOTES
-    Collector version: 1.1.0
+    Collector version: 1.2.0
     Requires:
       - PowerShell 5.1+ (PowerShell 7+ recommended)
       - dbatools PowerShell module
@@ -121,7 +121,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'SensitiveCollection.ps1')
 $ProgressPreference = 'SilentlyContinue'
 
-$CollectorVersion = '1.1.0'
+$CollectorVersion = '1.2.0'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Write-CollectorMessage {
@@ -1805,16 +1805,7 @@ ORDER BY h.run_date DESC, h.run_time DESC, h.instance_id DESC;
 
     # Independent from normal SSIS metadata/ISPAC capture; failures only freeze
     # this dedicated recovery scope. No policy/key/role updates are performed.
-    $sensitiveSsisPath = 'instance/sensitive-ssis/environment-variables.csv'
-    if (Test-SensitiveSection $sensitiveSsisPath) {
-        if ($SkipSsis -or -not (Test-SectionEnabled 'instance/ssis')) {
-            $script:CollectionSections += [ordered]@{path=$sensitiveSsisPath;status='disabled';error='SSIS collection disabled';files=@{};sensitive=$true}
-        } else {
-            Invoke-CollectionSection $sensitiveSsisPath {
-                Export-SsisSensitiveEnvironment -ServerObject $server -TargetPath (Join-Path $OutputDirectory $sensitiveSsisPath)
-            }
-        }
-    }
+    Invoke-SsisSensitiveCollections -ServerObject $server -OutputDirectory $OutputDirectory -SkipSsis:$SkipSsis
 
     foreach ($db in $databases) {
         $safeName = Get-SafePathSegment -Value $db.Name

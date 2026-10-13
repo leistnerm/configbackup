@@ -24,6 +24,11 @@ function Invoke-QueryTable {
     } elseif($Query -match 'AS expected_count') {
         $null=$table.Columns.Add('expected_count',[long]);$null=$table.Rows.Add([long]$script:ExpectedCount)
     } else {
+        if($Query -match 'internal.object_parameters') {
+            $null=$table.Columns.Add('recovery_status',[string]);$null=$table.Columns.Add('referenced_variable_name',[string])
+            $null=$table.Columns.Add('value',[string]);$row=$table.NewRow();$row['recovery_status']='server_literal';$row['value']=if($Query -match 'a.object_type=20' -and $script:FailProject){[DBNull]::Value}else{'SECRET-SENTINEL'};$table.Rows.Add($row)
+            return ,$table
+        }
         $null=$table.Columns.Add('value',[string]);$null=$table.Rows.Add($(if($script:Decrypt){'SECRET-SENTINEL'}else{[DBNull]::Value}))
     }
     return ,$table
@@ -59,6 +64,24 @@ try {
     Invoke-CollectionSection $scope $action
     Assert ($script:CollectionSections[0].status -eq 'failed') 'Incomplete joined inventory certified'
     Assert ((Get-FileHash (Join-Path $OutputDirectory $scope)).Hash -eq $first) 'Incomplete inventory changed previous bytes'
+    $projectScope='instance/sensitive-ssis/project-parameters.csv';$packageScope='instance/sensitive-ssis/package-parameters.csv'
+    $env:CONFIGBACKUP_SENSITIVE_SECTIONS='[]';$script:CollectionSections=@()
+    Invoke-SsisSensitiveCollections -ServerObject $null -OutputDirectory $OutputDirectory
+    Assert ($script:CollectionSections.Count -eq 0) 'Recovery ran without approval'
+    $env:CONFIGBACKUP_SENSITIVE_SECTIONS=ConvertTo-Json -Compress -InputObject @($projectScope,$packageScope,$scope)
+    $script:ExpectedCount=1;$script:FailProject=$true;$script:CollectionSections=@()
+    Invoke-SsisSensitiveCollections -ServerObject $null -OutputDirectory $OutputDirectory
+    Assert (($script:CollectionSections | Where-Object path -eq $projectScope).status -eq 'failed') 'Failed project certified'
+    Assert (($script:CollectionSections | Where-Object path -eq $packageScope).status -eq 'complete') 'Project failure stopped package recovery'
+    Assert (($script:CollectionSections | Where-Object path -eq $scope).status -eq 'complete') 'Project failure stopped environment recovery'
+    $env:CONFIGBACKUP_SENSITIVE_SECTIONS=ConvertTo-Json -Compress -InputObject @($packageScope)
+    $script:CollectionSections=@();Invoke-SsisSensitiveCollections -ServerObject $null -OutputDirectory $OutputDirectory
+    Assert ($script:CollectionSections.Count -eq 1 -and $script:CollectionSections[0].path -eq $packageScope) 'Approval inherited by sibling'
+    $script:CollectionSections=@();Invoke-SsisSensitiveCollections -ServerObject $null -OutputDirectory $OutputDirectory -SkipSsis $true
+    Assert ($script:CollectionSections[0].status -eq 'disabled') 'SkipSsis did not apply to parameter recovery'
+    $env:CONFIGBACKUP_SECTIONS=ConvertTo-Json -Compress -InputObject @{$packageScope=$false}
+    $script:CollectionSections=@();Invoke-SsisSensitiveCollections -ServerObject $null -OutputDirectory $OutputDirectory
+    Assert ($script:CollectionSections[0].status -eq 'disabled') 'Section disable did not apply'
     'PASS: explicit consent, read-only queries, denied/null recovery isolation, normal SSIS continuity and deterministic synthetic output.'
 } finally {
     $env:CONFIGBACKUP_SENSITIVE_SECTIONS=$old;$env:CONFIGBACKUP_SECTIONS=$oldSections
