@@ -3,7 +3,7 @@ import json,sys,tempfile,time
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
-import transaction_journal as tj
+import configbackup_lib.recovery.transaction_journal as tj
 rows=[]
 for n in [100,1000,5000]:
     with tempfile.TemporaryDirectory(prefix='cbjournal-benchmark-') as td:

@@ -4,7 +4,7 @@ import argparse,json,subprocess,sys,uuid
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2];sys.path[:0]=[str(ROOT),str(ROOT/'collectors/system')]
 from firewall_inventory import collect
-from completeness import Coverage,publish
+from configbackup_lib.engine.completeness import Coverage,publish
 
 def run(args):return subprocess.run(args,check=True,capture_output=True,text=True).stdout
 

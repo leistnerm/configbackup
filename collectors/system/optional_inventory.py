@@ -16,9 +16,9 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from completeness import section
-from sections import enabled
-from telemetry import envelope, dataset, write_envelope
+from configbackup_lib.engine.completeness import section
+from configbackup_lib.engine.sections import enabled
+from configbackup_lib.reporting.telemetry import envelope, dataset, write_envelope
 
 MASK='[VALUE NOT COLLECTED]'
 MAX_FILE=16*1024*1024

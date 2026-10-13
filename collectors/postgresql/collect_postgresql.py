@@ -31,10 +31,10 @@ from pathlib import Path
 from typing import Any, Iterable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from completeness import publish, section
-from telemetry import utcnow
-from sections import enabled as section_enabled
-from sensitive_data import requested as sensitive_requested
+from configbackup_lib.engine.completeness import publish, section
+from configbackup_lib.reporting.telemetry import utcnow
+from configbackup_lib.engine.sections import enabled as section_enabled
+from configbackup_lib.git.sensitive_data import requested as sensitive_requested
 
 COLLECTOR_VERSION = "1.1.0"
 
@@ -768,7 +768,7 @@ def collect_schedulers(tools: PgTools, db: str, db_root: Path, failures: list[di
                     """),
                 )
                 if history is not None:
-                    stable_csv(db_root.parents[1] / "telemetry" / db_root.name / "pg-cron-runs.csv", history)
+                    stable_csv(db_root.parents[1] / 'telemetry' / db_root.name / "pg-cron-runs.csv", history)
 
     if "pgagent" in extnames:
         if getattr(tools.args, "include_scheduler_history", False) and section_enabled("telemetry/history"):
@@ -1077,7 +1077,7 @@ def collect_database(tools: PgTools, row: dict[str, Any], root: Path, server_ver
             ),
         )
         if relation_sizes is not None:
-            stable_csv(root / "telemetry" / safe_db / "relation-sizes.csv", relation_sizes)
+            stable_csv(root / 'telemetry' / safe_db / "relation-sizes.csv", relation_sizes)
 
     query_and_write(tools, db, db_root, 'inventory/table-grants.csv',
         "SELECT grantor,grantee,table_catalog,table_schema,table_name,privilege_type,is_grantable,with_hierarchy FROM information_schema.table_privileges ORDER BY table_schema,table_name,grantee,privilege_type,grantor", failures, f'database.{db}.table_grants')

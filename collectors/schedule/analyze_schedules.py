@@ -29,7 +29,7 @@ import yaml
 VERSION = '1.0.0'
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from completeness import Coverage, MANIFEST
+from configbackup_lib.engine.completeness import Coverage, MANIFEST
 from schedule_insights import analyze as analyze_insights, success as execution_success
 REPORT_SETTINGS = {}
 
@@ -788,7 +788,7 @@ def certified_source(path, source, warnings):
         yield path
         return
     with tempfile.TemporaryDirectory(prefix='configbackup-report-') as folder:
-        coverage=Coverage(path,settings=source.get("sections"))
+        coverage=Coverage(path,settings=source.get('sections'))
         root=coverage.seal(folder)
         for entry in coverage.sections:
             if entry['status']!='complete':warnings.append(str(path)+': section '+entry['path']+' '+entry['status']+'; omitted from report')

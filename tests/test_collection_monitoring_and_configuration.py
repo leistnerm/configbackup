@@ -3,12 +3,12 @@ from email import policy
 from email.parser import BytesParser
 from pathlib import Path
 from unittest.mock import patch
-import configbackup as cb
-import configure
-from completeness import Coverage,publish,section
-import monitoring as mon
-import notifications as notify
-import telemetry
+import configbackup_lib.engine.configbackup as cb
+from configbackup_lib.ui import configure
+from configbackup_lib.engine.completeness import Coverage,publish,section
+import configbackup_lib.reporting.monitoring as mon
+import configbackup_lib.reporting.notifications as notify
+from configbackup_lib.reporting import telemetry
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'collectors/system'));sys.path.insert(0,str(ROOT/'collectors/schedule'))
 import storage_inventory as storage

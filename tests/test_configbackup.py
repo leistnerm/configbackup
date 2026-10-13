@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import configbackup as cb
+import configbackup_lib.engine.configbackup as cb
 
 
 class ConfigBackupTests(unittest.TestCase):
@@ -632,7 +632,7 @@ tasks:
             subprocess.run(["git", "--git-dir", str(remote), "symbolic-ref", "HEAD", "refs/heads/main"], check=True)
 
             # Simulate the 1.4.0 layout left behind by an interrupted/failed run.
-            legacy_root = Path(tempfile.gettempdir()) / "configbackup" / f"test-{uuid.uuid4().hex}"
+            legacy_root = Path(tempfile.gettempdir()) / 'configbackup' / f"test-{uuid.uuid4().hex}"
             legacy_worktree = legacy_root / "git-worktrees" / "configbackup_test-host"
             legacy_worktree.parent.mkdir(parents=True, exist_ok=True)
             try:

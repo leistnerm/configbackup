@@ -17,8 +17,8 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-import access_scripts
-from completeness import Coverage
+from configbackup_lib.engine import access_scripts
+from configbackup_lib.engine.completeness import Coverage
 
 
 def main():
@@ -241,12 +241,12 @@ if($Mode -eq 'create-reader') {
                     assert scripts,'Expected a sanitized generated login script'
                     for script in scripts:
                         assert query('SET PARSEONLY ON;\n'+script.read_text(),check=False).returncode!=0,'Removed password marker must not be executable SQL'
-                    from secret_scan import scan_bytes
+                    from configbackup_lib.git.secret_scan import scan_bytes
                     assert all(not scan_bytes(script.read_bytes(),script.name) for script in scripts)
                     result['shared']['sanitized_login_scripts']=len(scripts)
                     result['shared']['sanitized_scripts_require_new_password']=True
 
-                import startup_launcher
+                from configbackup_lib.engine import startup_launcher
                 config_path=out/'launcher-config.json';config_path.write_text(json.dumps(shared_config()))
                 startup_launcher.generate(config_path,out/'launcher','windows' if os.name=='nt' else 'macos' if sys.platform=='darwin' else 'linux',sys.executable,
                     mode='diagnostic',task='fixture',report_directory=str(out/'launcher-reports'))

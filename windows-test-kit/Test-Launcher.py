@@ -33,6 +33,8 @@ class LauncherTests(unittest.TestCase):
     def fake(self, args, output, log, env, timeout=240):
         self.calls.append((args, env, timeout))
         (output / log).write_text('SIMULATED CHILD PROCESS\n')
+        if log == 'native-launcher.txt':
+            return self.transform(log, {'status':'PASS'})[1] if self.transform else 0
         if log == 'offline-console.txt':
             (output / 'offline-checks').mkdir()
             data = {'status': 'PASS', 'results': [{'check': str(n), 'status': 'PASS'} for n in range(w.EXPECTED_CHECKS)]}
@@ -64,9 +66,16 @@ class LauncherTests(unittest.TestCase):
         with patch.object(w, 'package_check', return_value=checks), patch.object(w, 'windows_details', return_value={'windows': windows, 'elevated': False, 'gpresult': gpresult}), patch.object(w.shutil, 'which', return_value='/fixture/git'), contextlib.redirect_stdout(io.StringIO()):
             return w.run_suite(kit, self.output, offline_only=offline, users=[r'EXAMPLE\normal user'], execute=self.fake, components=components, details=details, offer_install=offer_install)
 
+    def test_native_launcher_failure_does_not_stop_gpo(self):
+        def transform(log,data):return data,1 if log=='native-launcher.txt' else 0
+        data=self.run_case(transform=transform)
+        self.assertEqual(data['status'],'FAIL')
+        self.assertEqual(data['stages'][2]['status'],'FAIL')
+        self.assertEqual(data['stages'][3]['status'],'PASS')
+
     def test_components_in_same_report(self):
         data=self.run_case(components=['iis'])
-        self.assertEqual(data['status'],'PASS');self.assertEqual(len(self.calls),5)
+        self.assertEqual(data['status'],'PASS');self.assertEqual(len(self.calls),6)
         self.assertEqual(data['components']['scopes'][0]['status'],'PASS')
         self.assertIn('windows-components/iis/server/settings',(self.output/'report.html').read_text())
 
@@ -78,8 +87,8 @@ class LauncherTests(unittest.TestCase):
             return data,0
         data=self.run_case(transform,components=['iis'])
         self.assertEqual(data['status'],'INCOMPLETE')
-        self.assertEqual(data['stages'][2]['status'],'PASS')
-        self.assertEqual(len(self.calls),5)
+        self.assertEqual(data['stages'][3]['status'],'PASS')
+        self.assertEqual(len(self.calls),6)
         self.assertIn('Fixture denied',(self.output/'report.html').read_text())
 
     def test_component_corrupt_manifest_fails_after_other_checks(self):
@@ -87,14 +96,14 @@ class LauncherTests(unittest.TestCase):
             if log=='component-run-2.log':data['finalized']=False
             return data,0
         data=self.run_case(transform,components=['iis'])
-        self.assertEqual(data['status'],'FAIL');self.assertEqual(data['stages'][2]['status'],'PASS')
+        self.assertEqual(data['status'],'FAIL');self.assertEqual(data['stages'][3]['status'],'PASS')
 
     def test_offline_components_are_explicitly_not_run(self):
         data=self.run_case(offline=True,components=['iis'],details=['iis-extended'])
         self.assertEqual(data['requested_details'],['iis-extended'])
         self.assertIn('iis-extended',(self.output/'report.html').read_text())
-        self.assertEqual(len(data['stages']),4);self.assertEqual(data['stages'][-1]['status'],'NOT RUN')
-        self.assertEqual(data['status'],'INCOMPLETE');self.assertEqual(len(self.calls),2)
+        self.assertEqual(len(data['stages']),5);self.assertEqual(data['stages'][-1]['status'],'NOT RUN')
+        self.assertEqual(data['status'],'INCOMPLETE');self.assertEqual(len(self.calls),3)
 
     def test_new_setup_interpreter_is_rechecked_and_used_for_all_children(self):
         selected='/fixture/new environment/python'
@@ -114,7 +123,7 @@ class LauncherTests(unittest.TestCase):
     def test_full_simulated_run_and_argument_boundaries(self):
         data = self.run_case()
         self.assertEqual(data['status'], 'PASS')
-        self.assertEqual(len(self.calls), 3)
+        self.assertEqual(len(self.calls), 4)
         live = self.calls[-1][0]
         self.assertIn('--runs', live)
         self.assertEqual(live[-2:], ['--user', r'EXAMPLE\normal user'])
@@ -127,13 +136,13 @@ class LauncherTests(unittest.TestCase):
         data = self.run_case(missing_deps=True)
         self.assertEqual(data['status'], 'INCOMPLETE')
         self.assertEqual(data['stages'][0]['status'], 'NOT RUN')
-        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(len(self.calls), 3)
         self.assertEqual(data['stages'][-1]['status'], 'PASS')
 
     def test_offline_skip_never_claims_pass(self):
         data = self.run_case(offline=True)
         self.assertEqual(data['status'], 'INCOMPLETE')
-        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(len(self.calls), 3)
 
     def test_non_windows_runs_fixtures_only(self):
         data = self.run_case(windows=False)
@@ -143,7 +152,7 @@ class LauncherTests(unittest.TestCase):
     def test_missing_gpresult_is_incomplete(self):
         data = self.run_case(gpresult=None)
         self.assertEqual(data['status'], 'INCOMPLETE')
-        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(len(self.calls), 3)
 
     def test_application_failure_does_not_stop_gpo(self):
         def transform(log, data):
@@ -154,13 +163,13 @@ class LauncherTests(unittest.TestCase):
         data = self.run_case(transform)
         self.assertEqual(data['status'], 'FAIL')
         self.assertEqual(data['stages'][-1]['status'], 'PASS')
-        self.assertEqual(len(self.calls), 3)
+        self.assertEqual(len(self.calls), 4)
 
     def test_unexpected_child_exit_cannot_pass(self):
         data = self.run_case(lambda log, data: (data, 9 if log == 'offline-console.txt' else 0))
         self.assertEqual(data['status'], 'FAIL')
         self.assertIn('disagrees', data['stages'][0]['detail'])
-        self.assertEqual(len(self.calls), 3)
+        self.assertEqual(len(self.calls), 4)
 
     def test_missing_result_is_failure_and_later_stages_continue(self):
         def transform(log, data):
@@ -286,7 +295,7 @@ class LauncherTests(unittest.TestCase):
     def test_unfinished_report_never_passes(self):
         self.assertEqual(w.overall({'prerequisites': [], 'stages': []}), 'INCOMPLETE')
         for result in ('NOT RUN', 'INCOMPLETE', 'FAIL', 'REVIEW'):
-            data = {'prerequisites': [], 'stages': [{'status': result}, {'status': 'PASS'}, {'status': 'PASS'}]}
+            data = {'prerequisites': [], 'stages': [{'status': result}, {'status': 'PASS'}, {'status': 'PASS'}, {'status': 'PASS'}]}
             self.assertEqual(w.overall(data), 'INCOMPLETE' if result == 'NOT RUN' else result)
 
     def test_real_child_command_is_shell_free_and_handles_unicode_paths(self):

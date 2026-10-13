@@ -1,10 +1,10 @@
 import contextlib, copy, datetime as dt, importlib.util, io, json, os, subprocess, sys, tempfile, unittest
 from pathlib import Path
 from unittest.mock import patch
-import configbackup as cb
-from completeness import Coverage, publish, section
-from recovery import recover
-from secret_scan import scan_bytes
+import configbackup_lib.engine.configbackup as cb
+from configbackup_lib.engine.completeness import Coverage, publish, section
+from configbackup_lib.recovery.recovery import recover
+from configbackup_lib.git.secret_scan import scan_bytes
 ROOT=Path(__file__).resolve().parents[1]
 def module(name,path):
     spec=importlib.util.spec_from_file_location(name,ROOT/path)

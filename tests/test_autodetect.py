@@ -9,8 +9,8 @@ import tempfile
 import types
 import unittest
 from unittest.mock import patch
-import autodetect as a
-import configure
+import configbackup_lib.engine.autodetect as a
+from configbackup_lib.ui import configure
 
 
 def response(out='',code=0):return types.SimpleNamespace(stdout=out,returncode=code)

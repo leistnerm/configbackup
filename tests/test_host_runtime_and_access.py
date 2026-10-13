@@ -2,14 +2,14 @@ import json,os,subprocess,sys,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1];sys.path[:0]=[str(ROOT),str(ROOT/'collectors/system')]
-from completeness import Coverage,publish
+from configbackup_lib.engine.completeness import Coverage,publish
 import drive_health as drives
 import firewall_inventory as firewall
 import network_inventory as network
 import storage_inventory as storage
-import runtime_history as history
-import startup_launcher as launcher
-import access_scripts
+import configbackup_lib.reporting.runtime_history as history
+import configbackup_lib.engine.startup_launcher as launcher
+from configbackup_lib.engine import access_scripts
 
 class DriveHealthTests(unittest.TestCase):
     def test_nvme_health_and_unknown_are_distinct(self):

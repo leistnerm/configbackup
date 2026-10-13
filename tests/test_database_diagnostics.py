@@ -1,9 +1,9 @@
 import contextlib,io,json,os,subprocess,sys,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
-import database_diagnostics as diag
-import configure
-from completeness import publish,section
+import configbackup_lib.engine.database_diagnostics as diag
+from configbackup_lib.ui import configure
+from configbackup_lib.engine.completeness import publish,section
 
 class DiagnosticTests(unittest.TestCase):
     def test_permission_probe_failure_keeps_connection_success(self):

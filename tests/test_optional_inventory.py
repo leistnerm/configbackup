@@ -15,7 +15,7 @@ sys.path.insert(0,str(ROOT));sys.path.insert(0,str(ROOT/'collectors/system'))
 import optional_inventory as inv
 import optional_catalog as catalog
 import windows_components as wc
-from completeness import Coverage,publish,section
+from configbackup_lib.engine.completeness import Coverage,publish,section
 
 class OptionalInventoryTests(unittest.TestCase):
     def setUp(self):
@@ -23,7 +23,7 @@ class OptionalInventoryTests(unittest.TestCase):
         self.env=patch.dict(os.environ,{'CONFIGBACKUP_SECTIONS':'{}'});self.env.start()
     def tearDown(self):self.env.stop();self.tmp.cleanup()
     def test_catalog_off_by_default_and_read_only_discovery(self):
-        from collector_catalog import catalog as public_catalog
+        from configbackup_lib.engine.collector_catalog import catalog as public_catalog
         rows=public_catalog();self.assertEqual(len(rows),18);self.assertTrue(all(r['default'] is False for r in rows))
         seen=[]
         def run(args,**kw):seen.append(args);return subprocess.CompletedProcess(args,0,b'["DnsServer","NPS"]',b'')
@@ -106,7 +106,7 @@ class OptionalInventoryTests(unittest.TestCase):
         scopes,failures=wc.collect(self.root,details=['dns-policies'],windows=True,powershell='fake',execute=execute)
         self.assertFalse(failures);self.assertEqual(calls[0][-1],'dns');self.assertEqual(json.loads(calls[0][calls[0].index('-DetailsJson')+1]),['dns-policies'])
     def test_old_optional_scopes_preserved_on_discovery_failure_in_real_archive(self):
-        import configbackup as cb
+        import configbackup_lib.engine.configbackup as cb
         output=self.root/'source';source=self.root/'nginx.conf';source.write_text('listen 80;')
         config={'backup':{'root':str(self.root/'archive')},'options':{'log_level':'CRITICAL'},'tasks':[{'name':'web','type':'directory','source':str(output),'destination':'web','collection_manifest':True}]}
         def run():

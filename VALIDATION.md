@@ -32,12 +32,26 @@ See the individual collector guides for scope and prerequisites. Use a disposabl
 
 SQL Server login hash exports and PostgreSQL role hash exports were checked against disposable databases for default exclusion, explicit opt-in and repeat determinism. A synthetic SQL certificate/key fixture verifies environment/project/package recovery, current-version filtering, repeat determinism, corrupt-value isolation and missing-key/incomplete-inventory preservation. Mocked PowerShell and archive/Git fixtures verify that failed recovery preserves prior bytes while normal SSIS sections continue. Real Windows SSISDB recovery, protected credential exports and linked-server password recovery remain unverified. See [sensitive collection](docs/sensitive-collection.md).
 
-## 1.3.1 automated checks
+## 1.4.0 validation
 
-The application suite passed all 514 tests on macOS with PowerShell available.
-Linux Python 3.10 passed 512 tests with two PowerShell-dependent tests skipped.
-New tests exercise unchanged/moved PR branches, missing worktrees, corrupted
-journals, explicit reset and evidence-copy failure, PR cleanup ordering on success
-and failure, policy validation/environment propagation, and generated launcher
-arguments. Policy tests simulate Windows environment selection; they do not prove
-native Windows policy enforcement or Group Policy behavior.
+- macOS: 533 application tests attempted; 532 passed, one native CMD test skipped.
+  PowerShell 7 executed the generated PS1 fixture, including Unicode paths and exit codes.
+- Linux/Python 3.10: 533 attempted; 529 passed, four PowerShell/Windows tests skipped.
+- After the final dangling-junction detection adjustment, all 33 targeted journal
+  tests passed. Native Windows junction behavior remains unverified.
+- Windows kit: 313 selected application checks and 42 GPO fixtures passed locally.
+  Live Windows stages correctly remain NOT RUN/INCOMPLETE on macOS.
+- All 60 kit runner/prerequisite/component tests passed (33/15/12), covering
+  continued execution after individual stage failure, integrity checks and
+  simulated installation/interpreter changes.
+- Live SQL Server: OFFLINE and RESTORING database isolation preserved failed
+  snapshots while healthy databases continued; subsequent recovery passed.
+- Live PostgreSQL 17: deterministic repeat output, locked-schema failure isolation,
+  archive/Git preservation, next-run recovery and schema reconstruction passed.
+- A standalone offline deployment pack rebuilt the reorganized application in a
+  fresh macOS environment; the restored version and configurator commands ran.
+- Release archives are built twice with matching bytes and verified ZIP CRCs.
+
+Portable tests do not establish native CMD, Windows PowerShell 5.1, Group Policy
+execution-policy precedence, scheduled-account or Windows reparse-point behavior.
+Use the Windows kit on the intended host and review its individual stage results.

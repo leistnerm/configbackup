@@ -3,8 +3,8 @@ import json
 from pathlib import Path
 import re
 import sys
-from completeness import section
-from sections import enabled
+from configbackup_lib.engine.completeness import section
+from configbackup_lib.engine.sections import enabled
 from storage_inventory import text,Unavailable
 
 

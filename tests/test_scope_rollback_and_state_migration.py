@@ -10,14 +10,14 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import yaml
-import configbackup as cb
-import completeness as c
-import determinism
-import recovery_assets as ra
-import recovery_maintenance as rm
-import schedule_discovery as sd
-import task_lifecycle as tl
-from transaction_journal import Journal
+import configbackup_lib.engine.configbackup as cb
+import configbackup_lib.engine.completeness as c
+from configbackup_lib.engine import determinism
+import configbackup_lib.recovery.recovery_assets as ra
+import configbackup_lib.recovery.recovery_maintenance as rm
+import configbackup_lib.engine.schedule_discovery as sd
+import configbackup_lib.engine.task_lifecycle as tl
+from configbackup_lib.recovery.transaction_journal import Journal
 
 
 class ScopeRollbackAndStateMigrationTests(unittest.TestCase):
@@ -61,8 +61,8 @@ class ScopeRollbackAndStateMigrationTests(unittest.TestCase):
         saved=json.loads(e.state.path.read_text())
         self.assertTrue(all((e.root/v['path']).is_file() for record in saved['tasks']['archive']['files'].values() for v in record['versions']))
     def test_backup_retry_overrides_successful_collector_cadence(self):
-        script="import os,sys;from pathlib import Path;sys.path.insert(0,sys.argv[1]);from completeness import publish,section;p=Path(os.environ['CONFIGBACKUP_OUTPUT']);p.mkdir(exist_ok=True,parents=True);(p/'db').mkdir(exist_ok=True);(p/'db/schema').write_text('12345');publish(p,[section(p,'db')])"
-        self.cfg['tasks']=[{'name':'collect','type':'execute','executable':sys.executable,'arguments':['-c',script,str(Path(cb.__file__).parent)],'output_directory':str(self.src),'collection_interval_hours':24},{'name':'archive','type':'directory','source':str(self.src),'destination':'dbs','depends_on':['collect'],'collection_manifest':True,'max_scope_bytes':1}]
+        script="import os,sys;from pathlib import Path;sys.path.insert(0,sys.argv[1]);from configbackup_lib.engine.completeness import publish,section;p=Path(os.environ['CONFIGBACKUP_OUTPUT']);p.mkdir(exist_ok=True,parents=True);(p/'db').mkdir(exist_ok=True);(p/'db/schema').write_text('12345');publish(p,[section(p,'db')])"
+        self.cfg['tasks']=[{'name':'collect','type':'execute','executable':sys.executable,'arguments':['-c',script,str(__import__('configbackup_lib').APPLICATION_ROOT)],'output_directory':str(self.src),'collection_interval_hours':24},{'name':'archive','type':'directory','source':str(self.src),'destination':'dbs','depends_on':['collect'],'collection_manifest':True,'max_scope_bytes':1}]
         self.assertEqual(self.run_engine()[1],4);self.cfg['tasks'][1]['max_scope_bytes']=10
         e,code=self.run_engine();self.assertEqual(code,0);self.assertEqual(e.results['archive'].status,'success');self.assertTrue(e.state.task('archive')['files'])
         e,code=self.run_engine();self.assertEqual(e.results['collect'].status,'not_due');self.assertEqual(e.results['archive'].status,'not_due')
@@ -85,15 +85,15 @@ class ScopeRollbackAndStateMigrationTests(unittest.TestCase):
         self.assertEqual(canonical_pg(a),canonical_pg(a.replace('Abc','Def')))
     def test_journal_source_read_failure_does_not_poison_sibling(self):
         a=self.root/'a';b=self.root/'b';a.write_text('a');b.write_text('b');j=Journal(self.root/'journal',[self.root]);j.begin()
-        with patch('transaction_journal.shutil.copyfileobj',side_effect=OSError('synthetic read error')):
+        with patch('configbackup_lib.recovery.transaction_journal.shutil.copyfileobj',side_effect=OSError('synthetic read error')):
             with self.assertRaises(OSError):j.remember(a)
         j.remember(b);b.write_text('changed');Journal(j.directory,[self.root]).recover();self.assertEqual(b.read_text(),'b')
     def test_journal_metadata_is_linear_and_missing_entry_fails_closed(self):
         j=Journal(self.root/'journal',[self.root]);j.begin();written=[]
-        import transaction_journal as tj
+        import configbackup_lib.recovery.transaction_journal as tj
         real=tj.atomic
         def capture(path,data):written.append(len(data));return real(path,data)
-        with patch('transaction_journal.atomic',capture):
+        with patch('configbackup_lib.recovery.transaction_journal.atomic',capture):
             for i in range(100):j.remember(self.root/f'file-{i}')
         self.assertLess(sum(written),100_000)
         (j.directory/'entry-00000020.json').unlink()
@@ -115,7 +115,7 @@ class ScopeRollbackAndStateMigrationTests(unittest.TestCase):
     def test_code_only_change_invalidates_export_freshness(self):
         config=self.src/'config.yaml';config.write_text('tasks: []\n');clone=self.root/'application';clone.mkdir()
         (clone/'configbackup.py').write_text('# version remains unchanged');(clone/'requirements.txt').write_text('PyYAML')
-        with patch.object(ra,'__file__',str(clone/'recovery_assets.py')):
+        with patch.object(ra,'APPLICATION_ROOT',clone):
             first=rm.refresh({},config,self.root/'exports');self.assertEqual(rm.freshness({},config,first['bundle'])['status'],'current')
             (clone/'configbackup.py').write_text('# same-version correction')
             self.assertEqual(rm.freshness({},config,first['bundle'])['status'],'stale_or_invalid')

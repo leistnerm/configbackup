@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from telemetry import envelope, dataset, write_envelope
+from configbackup_lib.reporting.telemetry import envelope, dataset, write_envelope
 
 
 def collect_health(tools, database, output, cluster_only=False):

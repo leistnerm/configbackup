@@ -8,11 +8,11 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import yaml
-import configbackup as cb
-import configure
-from config_editor import duplicate_group, effective_preview
-from completeness import publish,section,Coverage
-from recovery import recover,plan_restore
+import configbackup_lib.engine.configbackup as cb
+from configbackup_lib.ui import configure
+from configbackup_lib.configuration.config_editor import duplicate_group, effective_preview
+from configbackup_lib.engine.completeness import publish,section,Coverage
+from configbackup_lib.recovery.recovery import recover,plan_restore
 
 
 class ConfigurationAndRestoreSafetyTests(unittest.TestCase):
@@ -150,8 +150,8 @@ class ConfigurationAndRestoreSafetyTests(unittest.TestCase):
             self.assertEqual(cb.ConfigLoader(path).load()['tasks'],[])
 
     def test_advanced_profiles_map_without_credential_arguments(self):
-        from database_diagnostics import validate,pg_arguments
-        from database_connections import prepare
+        from configbackup_lib.engine.database_diagnostics import validate,pg_arguments
+        from configbackup_lib.configuration.database_connections import prepare
         pg={'engine':'postgresql','exclude_databases':['template*'],'split_table_ddl':True,'bloat_tables':['public.a'],'command_timeout':32,'dump_timeout':33,'lock_wait_timeout':'4s'}
         validate(pg);args=pg_arguments(pg)
         self.assertIn('--split-table-ddl',args);self.assertEqual(args[args.index('--dump-timeout')+1],'33')
@@ -163,7 +163,7 @@ class ConfigurationAndRestoreSafetyTests(unittest.TestCase):
         with self.assertRaises(ValueError):validate({**pg,'split_table_ddl':'false'})
 
     def test_email_sections_keep_their_list_schema(self):
-        from config_schema import validate_types
+        from configbackup_lib.configuration.config_schema import validate_types
         validate_types({'monitoring':{'notifications':{'channels':[{'id':'email','type':'smtp','sections':['alerts','changes']}]}}})
         validate_types({'monitoring':{'notifications':{'channels':[{'id':'email','type':'smtp','sections':{'alerts':{'enabled':True}}}]}}})
         with self.assertRaises(ValueError):validate_types({'tasks':[{'sections':['schema']}]})

@@ -13,9 +13,9 @@ import socket
 import subprocess
 import sys
 import yaml
-from completeness import section
-from sections import enabled
-from telemetry import envelope, dataset, write_envelope
+from configbackup_lib.engine.completeness import section
+from configbackup_lib.engine.sections import enabled
+from configbackup_lib.reporting.telemetry import envelope, dataset, write_envelope
 
 UNITS={'failed_count':'count','temperature_celsius':'celsius','wear_used_percent':'percent',
        'available_spare_percent':'percent','spare_below_threshold_count':'count','critical_warning_count':'count',

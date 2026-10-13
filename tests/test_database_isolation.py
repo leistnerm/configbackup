@@ -15,9 +15,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 spec = importlib.util.spec_from_file_location('pg_isolation_fixture', ROOT/'collectors/postgresql/collect_postgresql.py')
 pg = importlib.util.module_from_spec(spec); spec.loader.exec_module(pg)
-from completeness import Coverage
-from secret_scan import scan_bytes
-import configbackup as cb
+from configbackup_lib.engine.completeness import Coverage
+from configbackup_lib.git.secret_scan import scan_bytes
+import configbackup_lib.engine.configbackup as cb
 
 class Fixture:
     def __init__(self, args=None, *, fail_globals=False, fail_query='', bad_schema='', option=None):
@@ -126,7 +126,7 @@ class ExtensionAdapters(unittest.TestCase):
                 return [{'option_name':'host','option_value':'local.invalid'}]
         tools=Tools();failures=[]
         self.module.collect(tools,'example',self.root,'databases/example',['postgres_fdw'],failures,pg.capture_file,pg.redact_text)
-        from completeness import publish
+        from configbackup_lib.engine.completeness import publish
         publish(self.root,tools.collection_scopes);coverage=Coverage(self.root)
         self.assertTrue(failures);self.assertIn('databases/example/extension-adapters/postgres_fdw/servers.csv',coverage.files)
         self.assertFalse(coverage.permits_deletion('databases/example/extension-adapters/postgres_fdw/user-mappings.csv'))
@@ -140,7 +140,7 @@ class ExtensionAdapters(unittest.TestCase):
             self.module.collect(tools,'example',self.root,'databases/example',['postgres_fdw'],failures,pg.capture_file,pg.redact_text)
         self.assertEqual(tools.calls,[]);self.assertEqual(tools.collection_scopes[0]['status'],'disabled')
     def test_profile_new_options_validate_and_map(self):
-        import database_diagnostics as d
+        import configbackup_lib.engine.database_diagnostics as d
         p={'engine':'postgresql','extension_adapters':['postgres_fdw','pg_partman']};d.validate(p)
         self.assertEqual(d.pg_arguments(p).count('--extension-adapter'),2)
         with self.assertRaises(ValueError):d.validate({'engine':'postgresql','extension_adapters':['arbitrary']})
@@ -150,7 +150,7 @@ class SqlFinalizedScopes(unittest.TestCase):
     def test_actual_powershell_finalizer_and_legacy_parent_archive_migration(self):
         import shutil
         import subprocess
-        from completeness import publish,section
+        from configbackup_lib.engine.completeness import publish,section
         ps=shutil.which('pwsh') or '/usr/local/microsoft/powershell/7-preview/pwsh'
         if not Path(ps).is_file():self.skipTest('PowerShell unavailable')
         with tempfile.TemporaryDirectory() as tmp:

@@ -11,9 +11,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import yaml
-import recovery_assets as assets
-import setup_recovery as r
-import startup_launcher
+import configbackup_lib.recovery.recovery_assets as assets
+import configbackup_lib.recovery.setup_recovery as r
+from configbackup_lib.engine import startup_launcher
 
 class SetupRecoveryToolTests(unittest.TestCase):
     def setUp(self):
@@ -54,7 +54,7 @@ class SetupRecoveryToolTests(unittest.TestCase):
         self.assertTrue(any('run-configbackup' in p for p in cfg['backup']['configuration_files']))
         with self.assertRaises(ValueError):r.relocate(self.bundle,dest)
         with self.assertRaises(ValueError):r.relocate(self.bundle,self.source/'child')
-        with patch('configbackup.ConfigLoader.load',side_effect=ValueError('synthetic invalid config')):
+        with patch('configbackup_lib.engine.configbackup.ConfigLoader.load',side_effect=ValueError('synthetic invalid config')):
             bad=r.relocate(self.bundle,self.root/'invalid-candidate')
         self.assertEqual(bad['status'],'failed');self.assertEqual(bad['configuration_validation'],'failed')
     def test_prefix_mapping_does_not_change_embedded_commands(self):
@@ -89,12 +89,12 @@ class SetupRecoveryToolTests(unittest.TestCase):
         self.assertEqual(r.drill(self.bundle,history)['status'],'not_due')
         (self.bundle/'application/configbackup.py').write_text('changed');self.assertEqual(r.drill(self.bundle,history,force=True,keep=1)['status'],'failed')
         self.assertEqual(len(list(history.glob('drill-*.json'))),1)
-        from monitoring import flatten
+        from configbackup_lib.reporting.monitoring import flatten
         metrics=flatten(json.loads((history/'telemetry.json').read_text()));self.assertEqual(next(m['value'] for m in metrics if m['metric']=='configbackup.setup_recovery.failed_count'),1)
         self.assertIn('failed',(history/'report.html').read_text());self.assertTrue((history/'.drill.lock').exists())
     def test_drill_lock_interval_and_history_guards(self):
         self.export();history=self.root/'history';history.mkdir();(history/'.drill.lock').write_text('stale lock file')
-        from configbackup import single_instance_lock, LockError
+        from configbackup_lib.engine.configbackup import single_instance_lock, LockError
         with single_instance_lock(history/'.drill.lock'):
             with self.assertRaises(LockError):r.drill(self.bundle,history)
         with self.assertRaises(ValueError):r.drill(self.bundle,self.bundle/'history')

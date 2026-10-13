@@ -1,7 +1,7 @@
 import hashlib,json,subprocess,sys,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
-import deployment_pack as pack
+import configbackup_lib.recovery.deployment_pack as pack
 class DeploymentPackTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name).resolve();self.bundle=self.root/'bundle';self.bundle.mkdir();self.files={}

@@ -13,8 +13,8 @@ from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT));sys.path.insert(0,str(ROOT/'collectors/system'))
 import windows_components as wc
-from completeness import Coverage,publish
-import configbackup as cb
+from configbackup_lib.engine.completeness import Coverage,publish
+import configbackup_lib.engine.configbackup as cb
 
 class ComponentsTests(unittest.TestCase):
     def setUp(self):
@@ -95,7 +95,7 @@ class ComponentsTests(unittest.TestCase):
         self.assertNotEqual(second.state.task('components')['files']['host/'+a['scope']+'/configuration.json'],state['host/'+a['scope']+'/configuration.json'])
         self.assertEqual(json.loads((self.root/'git/host'/a['scope']/'configuration.json').read_text()),{'name':'updated'})
     def test_wizard_only_enables_selected_components(self):
-        import configure
+        from configbackup_lib.ui import configure
         answers=iter(['host','python','yes','no','yes','no'])
         with contextlib.redirect_stdout(io.StringIO()):tasks=configure.template_tasks('System',input_fn=lambda _:next(answers))
         self.assertIn('iis',tasks[0]['arguments']);self.assertIn('dhcp',tasks[0]['arguments']);self.assertNotIn('dns',tasks[0]['arguments']);self.assertNotIn('hyperv',tasks[0]['arguments'])

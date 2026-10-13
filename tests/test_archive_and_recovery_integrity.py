@@ -6,13 +6,13 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
-import configbackup as cb
-import completeness as c
-import archive_integrity as integrity
-import recovery_assets as assets
-import recovery_maintenance as maintenance
-import journal_recovery
-from transaction_journal import Journal
+import configbackup_lib.engine.configbackup as cb
+import configbackup_lib.engine.completeness as c
+import configbackup_lib.recovery.archive_integrity as integrity
+import configbackup_lib.recovery.recovery_assets as assets
+import configbackup_lib.recovery.recovery_maintenance as maintenance
+from configbackup_lib.recovery import journal_recovery
+from configbackup_lib.recovery.transaction_journal import Journal
 
 
 class ArchiveAndRecoveryIntegrityTests(unittest.TestCase):
@@ -54,9 +54,9 @@ class ArchiveAndRecoveryIntegrityTests(unittest.TestCase):
         self.capture('SELECT 1;');c.publish(self.source,[c.section(self.source,'one'),c.section(self.source,'one/schema.sql')])
         with self.assertRaises(ValueError):c.Coverage(self.source)
     def test_failed_git_commit_overrides_cadence_until_recovered(self):
-        script="import os;from pathlib import Path;from completeness import publish,section;p=Path(os.environ['CONFIGBACKUP_OUTPUT']);(p/'one').mkdir(parents=True,exist_ok=True);(p/'one/schema.sql').write_text('SELECT 1;');publish(p,[section(p,'one')])"
+        script="import os;from pathlib import Path;from configbackup_lib.engine.completeness import publish,section;p=Path(os.environ['CONFIGBACKUP_OUTPUT']);(p/'one').mkdir(parents=True,exist_ok=True);(p/'one/schema.sql').write_text('SELECT 1;');publish(p,[section(p,'one')])"
         self.config['git']={'repository':str(self.root/'git')};archive=self.config['tasks'][0];archive.update(storage='both',depends_on=['collect'])
-        self.config['tasks'].insert(0,{'name':'collect','type':'execute','executable':sys.executable,'arguments':['-c',script], 'environment':{'PYTHONPATH':str(Path(cb.__file__).parent)},'output_directory':str(self.source),'collection_interval_hours':24})
+        self.config['tasks'].insert(0,{'name':'collect','type':'execute','executable':sys.executable,'arguments':['-c',script], 'environment':{'PYTHONPATH':str(__import__('configbackup_lib').APPLICATION_ROOT)},'output_directory':str(self.source),'collection_interval_hours':24})
         with patch.object(cb.BackupEngine,'_finalize_git_repo',side_effect=OSError('commit failed')):self.assertEqual(self.run_engine()[1],4)
         e,code=self.run_engine();self.assertEqual(code,0);self.assertEqual(e.results['collect'].status,'success');self.assertFalse(e.state.data['publication']['pending'])
         self.assertEqual((self.root/'git/data/one/schema.sql').read_text(),'SELECT 1;')
@@ -69,7 +69,7 @@ class ArchiveAndRecoveryIntegrityTests(unittest.TestCase):
     def test_invalid_new_export_keeps_previous_pointer(self):
         config=self.root/'config.yaml';config.write_text('tasks: []\n');managed=self.root/'managed';maintenance.refresh({},config,managed)
         before=(managed/'latest.json').read_bytes();clone=self.root/'app';clone.mkdir();(clone/'configbackup.py').write_text('# incomplete')
-        with patch.object(assets,'__file__',str(clone/'recovery_assets.py')):
+        with patch.object(assets,'APPLICATION_ROOT',clone):
             with self.assertRaises(ValueError):maintenance.refresh({},config,managed)
         self.assertEqual(before,(managed/'latest.json').read_bytes());self.assertEqual(len(list(managed.glob('[0-9a-f]'*64))),1)
     def test_bad_journal_modes_never_approve_or_partially_restore(self):
@@ -80,7 +80,7 @@ class ArchiveAndRecoveryIntegrityTests(unittest.TestCase):
             with self.assertRaises(ValueError):Journal(j.directory,[self.root]).recover()
             self.assertEqual([a.read_text(),b.read_text()],['new','new'])
     def test_capacity_single_job_and_boundaries(self):
-        sys.path.insert(0,str(Path(cb.__file__).parent/'collectors/schedule'));import schedule_insights as si
+        sys.path.insert(0,str(__import__('configbackup_lib').APPLICATION_ROOT/'collectors/schedule'));import schedule_insights as si
         from types import SimpleNamespace
         jobs={k:SimpleNamespace(key=k,host='h',override_duration=10,durations=[]) for k in ('a','b')}
         timeline=[{'job_id':'a','start':'2026-01-01T00:00:00'},{'job_id':'b','start':'2026-01-01T00:10:00'}]

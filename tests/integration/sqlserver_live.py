@@ -5,8 +5,8 @@ Creates/removes uniquely named cbtest_* databases and one native backup in the s
 import argparse,contextlib,io,json,os,subprocess,sys,uuid
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2];sys.path.insert(0,str(ROOT))
-import configbackup as cb
-from completeness import Coverage
+import configbackup_lib.engine.configbackup as cb
+from configbackup_lib.engine.completeness import Coverage
 from collectors.common.compare_snapshots import audit
 
 def main():

@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import stat
 import zipfile
-VERSION = '1.3.1'
+VERSION = '1.4.0'
 GPO_VERSION = '1.0.0'
 ROOT = Path(__file__).resolve().parents[1]
 

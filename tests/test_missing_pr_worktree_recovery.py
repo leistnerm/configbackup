@@ -6,8 +6,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from transaction_journal import Journal
-import journal_recovery as recovery
+from configbackup_lib.recovery.transaction_journal import Journal
+import configbackup_lib.recovery.journal_recovery as recovery
 
 
 @unittest.skipUnless(shutil.which('git'), 'Git required')
@@ -81,7 +81,7 @@ class MissingPrWorktreeTests(unittest.TestCase):
         self.assertTrue(self.journal.manifest.exists())
 
     def test_reset_copy_failure_keeps_active_journal(self):
-        with patch('journal_recovery.shutil.copyfileobj', side_effect=OSError('disk full')):
+        with patch('configbackup_lib.recovery.journal_recovery.shutil.copyfileobj', side_effect=OSError('disk full')):
             with self.assertRaises(OSError):
                 recovery.reset(self.journal, [self.state])
         self.assertTrue(self.journal.manifest.exists())
@@ -104,7 +104,7 @@ class MissingPrWorktreeTests(unittest.TestCase):
         self.engine_run(fail=True)
 
     def engine_run(self, fail=False):
-        import configbackup as cb
+        import configbackup_lib.engine.configbackup as cb
         source = self.root / 'source'
         source.write_text('configuration')
         cfg = {'backup': {'root': str(self.root / 'run-archive'), 'include_configuration': False},

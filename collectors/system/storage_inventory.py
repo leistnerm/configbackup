@@ -14,9 +14,9 @@ import shutil
 import socket
 import subprocess
 import sys
-from completeness import section
-from sections import enabled
-from telemetry import envelope, dataset, write_envelope
+from configbackup_lib.engine.completeness import section
+from configbackup_lib.engine.sections import enabled
+from configbackup_lib.reporting.telemetry import envelope, dataset, write_envelope
 
 
 class Unavailable(RuntimeError):

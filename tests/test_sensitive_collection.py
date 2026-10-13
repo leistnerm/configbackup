@@ -10,12 +10,12 @@ import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
-import configbackup as cb
-import sensitive_data as policy
-from completeness import publish, section, Coverage
-from secret_scan import scan_bytes
+import configbackup_lib.engine.configbackup as cb
+import configbackup_lib.git.sensitive_data as policy
+from configbackup_lib.engine.completeness import publish, section, Coverage
+from configbackup_lib.git.secret_scan import scan_bytes
 from test_database_isolation import Fixture, pg
-import reporting
+from configbackup_lib.reporting import reporting
 
 SCOPE='instance/sensitive-ssis/environment-variables.csv'
 SECRET='SYNTHETIC-PRIVATE-RECOVERY-VALUE'
@@ -123,12 +123,12 @@ class SensitiveCollectionTests(unittest.TestCase):
         with patch.dict(os.environ,{policy.ENVIRONMENT:'["cluster/globals.sql"]'}):pg.capture_file(fixture,root,'cluster/globals.sql',failures,'globals',fail)
         self.assertNotIn(SECRET,json.dumps(failures))
     def test_child_environment_does_not_inherit_ambient_sensitive_permissions(self):
-        from database_connections import environment
+        from configbackup_lib.configuration.database_connections import environment
         env=environment({'engine':'postgresql'},{policy.ENVIRONMENT:'["cluster/globals.sql"]'})
         self.assertEqual(env[policy.ENVIRONMENT],'[]')
     def test_sensitive_permissions_cannot_be_inherited_from_defaults_or_connections(self):
-        from config_schema import validate_types
-        from database_connections import validate_connections
+        from configbackup_lib.configuration.config_schema import validate_types
+        from configbackup_lib.configuration.database_connections import validate_connections
         with self.assertRaises(ValueError):validate_types({'defaults':{'sensitive_sections':['cluster/globals.sql']}})
         with self.assertRaises(ValueError):validate_connections({'connections':{'pg':{'engine':'postgresql','sensitive_sections':['cluster/globals.sql']}}})
     def test_sensitive_failed_report_drops_cached_value_properties(self):
@@ -138,13 +138,13 @@ class SensitiveCollectionTests(unittest.TestCase):
         self.assertNotIn(SECRET,json.dumps(result))
     def test_guided_opt_in_requires_confirmation_and_supports_disable(self):
         config={'tasks':[{'name':'collector','type':'execute'}]}
-        with patch('configure.choice',return_value='collector'),patch('configure_features.select_many',return_value=['cluster/globals.sql']):
+        with patch('configbackup_lib.ui.configure.choice',return_value='collector'),patch('configbackup_lib.ui.configure_features.select_many',return_value=['cluster/globals.sql']):
             policy.collection_wizard(config,lambda _: 'no')
             self.assertNotIn('sensitive_sections',config['tasks'][0])
             policy.collection_wizard(config,lambda _: 'ENABLE SENSITIVE COLLECTION')
             self.assertEqual(config['tasks'][0]['sensitive_sections'],['cluster/globals.sql'])
         config['git']={'sensitive_data':{'enabled':True}}
-        with patch('configure.choice',return_value='Disable sensitive publication'):policy.git_wizard(config,lambda _: '')
+        with patch('configbackup_lib.ui.configure.choice',return_value='Disable sensitive publication'):policy.git_wizard(config,lambda _: '')
         self.assertFalse(config['git']['sensitive_data']['enabled'])
     def test_parameter_sections_require_separate_collection_and_git_approvals(self):
         project='instance/sensitive-ssis/project-parameters.csv'

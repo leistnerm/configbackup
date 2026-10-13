@@ -1,6 +1,6 @@
 Windows test kit coverage
 
-The launcher includes 283 selected application fixtures and 42 GPO fixtures.
+The launcher includes 313 selected application fixtures and 42 GPO fixtures.
 Additional tests cover launcher, prerequisite and component comparison behavior.
 Synthetic fixtures do not verify native Windows behavior. See WINDOWS-TESTING.md
 for the unverified platform matrix and LAUNCHER-GUIDE.txt for usage.

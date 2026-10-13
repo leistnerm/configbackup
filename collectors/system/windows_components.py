@@ -16,8 +16,8 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from completeness import publish, section
-from sections import enabled
+from configbackup_lib.engine.completeness import publish, section
+from configbackup_lib.engine.sections import enabled
 
 from collectors.system.optional_catalog import WINDOWS_COMPONENTS as COMPONENTS, WINDOWS_DETAILS
 PREFIX = "windows-components/"
@@ -116,7 +116,7 @@ def collect(root, components=(), *, details=(), powershell=None, windows=None, e
             scopes.append(section(root, scope, "failed", str(exc)))
             failures.append({"section": scope, "error": str(exc)})
     if 'certificates' in components and enabled('telemetry/certificates'):
-        from telemetry import envelope,dataset,write_envelope
+        from configbackup_lib.reporting.telemetry import envelope,dataset,write_envelope
         rows=[];now=dt.datetime.now(dt.timezone.utc)
         try:
             for entry in scopes:

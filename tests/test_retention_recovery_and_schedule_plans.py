@@ -5,12 +5,12 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-import configbackup as cb
-import journal_recovery as recovery
-import recovery_maintenance as maintenance
-import retention_planning
-import review_html
-from transaction_journal import Journal
+import configbackup_lib.engine.configbackup as cb
+import configbackup_lib.recovery.journal_recovery as recovery
+import configbackup_lib.recovery.recovery_maintenance as maintenance
+from configbackup_lib.recovery import retention_planning
+from configbackup_lib.reporting import review_html
+from configbackup_lib.recovery.transaction_journal import Journal
 
 
 class RetentionRecoveryAndSchedulePlanTests(unittest.TestCase):
@@ -26,7 +26,7 @@ class RetentionRecoveryAndSchedulePlanTests(unittest.TestCase):
         plan=recovery.inspect(j);self.assertEqual(recovery.reconcile(j,plan['plan_id'])['status'],'rolled_back');self.assertEqual(path.read_text(),'before')
     def test_changed_head_and_corrupt_before_image_are_blocked(self):
         path=self.root/'data';path.write_text('before');j=Journal(self.root/'journal',[self.root]);j.begin();j.remember(path)
-        with patch('journal_recovery.head',return_value='different'):
+        with patch('configbackup_lib.recovery.transaction_journal.head',return_value='different'):
             report=recovery.inspect(j);self.assertFalse(report['can_reconcile']);self.assertIn('Git HEAD changed',report['guidance'])
         (j.directory/'before-00000000').write_text('corrupt');self.assertEqual(recovery.inspect(j)['status'],'invalid');self.assertEqual(path.read_text(),'before')
     def test_orphan_journal_never_deleted_by_inspection(self):
@@ -74,14 +74,14 @@ class RetentionRecoveryAndSchedulePlanTests(unittest.TestCase):
         def fail_secondary(path,*args,**kwargs):
             if Path(path).is_relative_to(self.root/'secondary'):raise ValueError('synthetic copy error')
             return original(path,*args,**kwargs)
-        with patch('recovery_maintenance.check_copy',side_effect=fail_secondary):
+        with patch('configbackup_lib.recovery.recovery_maintenance.check_copy',side_effect=fail_secondary):
             result=maintenance.refresh(self.cfg,self.config,self.root/'managed',self.root/'secondary')
         self.assertEqual(result['secondary']['status'],'failed');self.assertTrue(Path(result['bundle']).is_dir());self.assertEqual(list((self.root/'secondary').glob('[0-9a-f]'*64)),[])
 
     def test_schedule_visual_shift_conflicts_exclusions_and_determinism(self):
         import sys
         from types import SimpleNamespace
-        sys.path.insert(0,str(Path(cb.__file__).parent/'collectors/schedule'))
+        sys.path.insert(0,str(__import__('configbackup_lib').APPLICATION_ROOT/'collectors/schedule'))
         import schedule_insights as insights
         jobs={k:SimpleNamespace(key=k,host='host',timezone='UTC',override_duration=20,durations=[],observed=[],source='test',heartbeats=[]) for k in ['a','b','watchdog']}
         timeline=[{'job_id':k,'start':'2026-01-01T01:00:00'} for k in jobs]
@@ -94,7 +94,7 @@ class RetentionRecoveryAndSchedulePlanTests(unittest.TestCase):
     def test_schedule_visual_unknown_duration_and_bounded_rows(self):
         import sys
         from types import SimpleNamespace
-        sys.path.insert(0,str(Path(cb.__file__).parent/'collectors/schedule'))
+        sys.path.insert(0,str(__import__('configbackup_lib').APPLICATION_ROOT/'collectors/schedule'))
         import schedule_visual as visual
         job=SimpleNamespace(timezone='UTC',override_duration=None,durations=[])
         visual.write_scenarios(self.root,[{'job_id':'a','start':'2026-01-01T00:00:00'},{'job_id':'a','start':'2026-01-01T01:00:00'}],{'a':job},[],[],[],[],{'max_visual_occurrences':1},False)

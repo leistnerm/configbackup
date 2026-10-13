@@ -3,8 +3,8 @@
 Never read foreign table contents, invoke maintenance, install an extension, or
 accept SQL from configuration. Absence preserves previous adapter snapshots.
 """
-from completeness import section
-from sections import enabled
+from configbackup_lib.engine.completeness import section
+from configbackup_lib.engine.sections import enabled
 
 PROVIDERS = ('postgres_fdw', 'postgis', 'pg_partman')
 

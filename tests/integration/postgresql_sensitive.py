@@ -10,7 +10,7 @@ import uuid
 from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[2];sys.path.insert(0,str(ROOT))
 from collectors.postgresql.collect_postgresql import PgTools,parse_args,CollectorError,capture_file,stable_text
-from sensitive_data import ENVIRONMENT
+from configbackup_lib.git.sensitive_data import ENVIRONMENT
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--bin-dir',required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--confirm-disposable',action='store_true',required=True);a=p.parse_args()

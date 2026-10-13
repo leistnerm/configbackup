@@ -26,8 +26,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from completeness import publish, section
-from sections import enabled as section_enabled
+from configbackup_lib.engine.completeness import publish, section
+from configbackup_lib.engine.sections import enabled as section_enabled
 
 COLLECTOR_VERSION = "1.0.0"
 
@@ -620,7 +620,7 @@ foreach($event in $events){{
         if runtime_rows is not None:
             if isinstance(runtime_rows, dict):
                 runtime_rows = [runtime_rows]
-            stable_csv(root / "telemetry" / "scheduled-task-runs.csv", runtime_rows)
+            stable_csv(root / 'telemetry' / "scheduled-task-runs.csv", runtime_rows)
 
     # Installed software from registry (Win32_Product intentionally avoided).
     software = best_effort("software.installed", lambda: run_ps_json(
@@ -846,7 +846,7 @@ def main(argv=None) -> int:
                 except OSError as exc:telemetry_failures.append({'section':name,'error':str(exc)})
         stable_json(root/'telemetry'/'collection-status.json',{'failures':telemetry_failures})
     if args.capacity_path and section_enabled("telemetry/capacity"):
-        from telemetry import collect_disks, write_envelope
+        from configbackup_lib.reporting.telemetry import collect_disks, write_envelope
         try: write_envelope(root/'telemetry'/'health.json', collect_disks(args.capacity_path))
         except Exception as exc: failures.append({'section':'telemetry/capacity','error':type(exc).__name__})
     storage_scopes=[]

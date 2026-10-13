@@ -12,7 +12,7 @@ AVAILABLE=importlib.util.find_spec('prompt_toolkit') is not None
 class ConsoleTests(unittest.TestCase):
     def drive(self,workflow,steps,resize=None):
         self.screens=[]
-        from console_ui import ConsoleUI
+        from configbackup_lib.ui.console_ui import ConsoleUI
         from prompt_toolkit.input.defaults import create_pipe_input
         from prompt_toolkit.output import DummyOutput
         async def exercise():
@@ -45,8 +45,8 @@ class ConsoleTests(unittest.TestCase):
         return asyncio.run(exercise())
 
     def test_arrows_filter_checklist_text_and_results(self):
-        from configure import choice,ask,boolean
-        from configure_features import select_many
+        from configbackup_lib.ui.configure import choice,ask,boolean
+        from configbackup_lib.ui.configure_features import select_many
         answers=[]
         def work(ui):
             answers.append(choice('Pick',['Alpha','Beta','Gamma'],ui))
@@ -60,13 +60,13 @@ class ConsoleTests(unittest.TestCase):
         self.assertIn('Finished without changing',ui.log_text)
 
     def test_checklist_escape_cancels_changes(self):
-        from configure_features import select_many
+        from configbackup_lib.ui.configure_features import select_many
         answers=[]
         self.drive(lambda ui:answers.append(select_many('Pages',['A','B'],['A'],ui)),[('Pages',' \x1b'),('Session complete','\r')])
         self.assertEqual(answers,[['A']])
 
     def test_actual_wizard_edit_validate_save_and_backup(self):
-        import configure
+        from configbackup_lib.ui import configure
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'config.yaml';path.write_text('sources: []\n# preserve comment\n')
             config={'sources':[]}
@@ -77,14 +77,14 @@ class ConsoleTests(unittest.TestCase):
             self.assertIn('enabled: true',path.read_text())
 
     def test_optional_console_dependency_closure(self):
-        from deployment_pack import dependencies
+        from configbackup_lib.recovery.deployment_pack import dependencies
         result=dependencies(['console'])
         self.assertIn('prompt-toolkit',result)
         self.assertIn('wcwidth',result)
         self.assertEqual(result,dependencies(['console']))
 
     def test_external_operation_suspends_and_returns_to_editor(self):
-        from configure import choice
+        from configbackup_lib.ui.configure import choice
         values=[]
         def work(ui):
             values.append(ui.run_external(lambda:42))
@@ -93,13 +93,13 @@ class ConsoleTests(unittest.TestCase):
         self.assertEqual(values,[42,'Done'])
 
     def test_escape_does_not_approve_confirmation(self):
-        from configure import boolean
+        from configbackup_lib.ui.configure import boolean
         answers=[]
         self.drive(lambda ui:answers.append(boolean('Publish',True,ui)),[('Publish','\x1b'),('Session complete','\r')])
         self.assertEqual(answers,[False])
 
     def test_redraw_has_header_menu_and_scrollable_results(self):
-        from configure import choice
+        from configbackup_lib.ui.configure import choice
         self.drive(lambda ui:choice('ConfigBackup configuration editor',['Tasks','Validate','Save'],ui),[('ConfigBackup configuration editor','\r'),('Session complete','\r')],resize=(24,100))
         screen=self.screens[0][1]
         lines=[''.join(screen.data_buffer[y][x].char for x in range(80)) for y in range(40)]
@@ -109,11 +109,21 @@ class ConsoleTests(unittest.TestCase):
         self.assertIn('Ctrl+C',footer)
 
     def test_cancel_does_not_write_and_controls_are_not_rendered(self):
-        from console_ui import clean
-        from configure import ask
+        from configbackup_lib.ui.console_ui import clean
+        from configbackup_lib.ui.configure import ask
         self.assertNotIn('\x1b',clean('name\x1b[2J'))
         self.assertNotIn('\x07',clean('name\x07'))
         ui=self.drive(lambda ui:ask('Name',input_fn=ui),[('Name','\x03\x03'),('Session complete','\r')])
         self.assertIn('Cancelled',ui.log_text)
 
-if __name__=='__main__':unittest.main()
+
+    def test_escape_text_and_boolean_preserve_existing_settings(self):
+        from configbackup_lib.ui.editor_forms import EditCancelled,edit_boolean
+        from configbackup_lib.ui.configure import ask
+        answers=[]
+        def work(ui):
+            answers.append(edit_boolean('Enabled',True,ui))
+            try:ask('Path','original',ui)
+            except EditCancelled:answers.append('cancelled')
+        self.drive(work,[('Enabled','\x1b'),('Path','changed\x1b'),('Session complete','\r')])
+        self.assertEqual(answers,[True,'cancelled'])

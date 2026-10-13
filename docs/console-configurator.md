@@ -22,10 +22,11 @@ On an interactive terminal, the configurator automatically opens a full-screen i
 | Tab | Switch between the current form/menu and the scrollable results panel |
 | Arrows / Page Up / Page Down in results | Scroll output, previews and validation messages |
 | F2 / F3 / F4 at the main menu | Save / Validate / Preview changes |
+| F5 / F6 at the main menu | Undo / Redo the last configuration action |
 | F10 at the main menu | Exit; asks before discarding changed configuration |
 | Ctrl+C twice | Cancel the editor and discard unsaved configuration edits |
 
-Text fields support normal cursor editing, Home/End and paste. Escape does not cancel a partially completed text form; use the menu's Back option or cancel the editor. Explicit side effects already performed, such as generating a launcher or approving an installation, are not undone by cancelling the configuration editor. While an operation is running, the interface waits for it to finish instead of abandoning a background write.
+Text fields support normal cursor editing, Home/End and paste. Escape cancels a text field; the current multi-step configuration action is rolled back in memory. Explicit side effects already performed, such as generating a launcher or approving an installation, are not undone by cancelling the configuration editor. While an operation is running, the interface waits for it to finish instead of abandoning a background write.
 
 The details panel keeps the most recent 50,000 characters of output in memory; it does not create a new diagnostic log file. Existing secret redaction and sensitive-collection confirmations still apply. Native installers and deployment operations temporarily return to the normal terminal, then restore the interface.
 
@@ -48,3 +49,5 @@ The file selected by `--config` is loaded before the interface opens. The initia
 A missing timezone database now produces an explicit `tzdata` installation message, rather than suggesting the default UTC timezone is invalid. Linux/macOS system timezone databases are accepted without requiring an unnecessary tzdata package. Missing console dependencies offer installation before falling back to numbered prompts.
 
 The **PowerShell execution policy** menu controls Windows child-process policy and newly generated launchers. See [setup](setup-walkthrough.md#powershell-execution-policy-on-windows). Save changes and regenerate existing launchers.
+
+See [configuration workflows](configuration-workflows.md) for launcher management, recovery, references and repair.

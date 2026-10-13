@@ -10,7 +10,7 @@ import argparse,json,os,re,shutil,stat,subprocess,sys,tempfile,uuid
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2];sys.path[:0]=[str(ROOT),str(ROOT/'collectors/system')]
 from storage_inventory import collect
-from completeness import publish,Coverage
+from configbackup_lib.engine.completeness import publish,Coverage
 
 
 def execute(args,check=True):

@@ -5,10 +5,10 @@ import os
 from pathlib import Path
 import platform
 import sys
-from completeness import section
-from sections import enabled
+from configbackup_lib.engine.completeness import section
+from configbackup_lib.engine.sections import enabled
 from storage_inventory import text,Unavailable,ordered_rows
-from telemetry import utcnow
+from configbackup_lib.reporting.telemetry import utcnow
 
 
 def collect(root,run_ps=None,platform_name=None,runtime=False):

@@ -5,8 +5,8 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT))
-import configbackup as cb
-from completeness import Coverage
+import configbackup_lib.engine.configbackup as cb
+from configbackup_lib.engine.completeness import Coverage
 from collectors.common.compare_snapshots import audit
 NS='http://schemas.microsoft.com/sqlserver/reporting/2010/03/01/ReportServer'
 class Handler(http.server.BaseHTTPRequestHandler):

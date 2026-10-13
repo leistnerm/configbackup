@@ -8,8 +8,8 @@ import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
 import yaml
-from completeness import section
-from sections import enabled
+from configbackup_lib.engine.completeness import section
+from configbackup_lib.engine.sections import enabled
 
 
 def defaults():

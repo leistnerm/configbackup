@@ -10,12 +10,12 @@ from unittest.mock import patch,MagicMock
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT),str(ROOT/'collectors/schedule')]
-import reporting
-import monitoring as mon
-import notifications
+from configbackup_lib.reporting import reporting
+import configbackup_lib.reporting.monitoring as mon
+from configbackup_lib.reporting import notifications
 import schedule_insights as insights
 import analyze_schedules as schedules
-from completeness import publish,section
+from configbackup_lib.engine.completeness import publish,section
 
 
 class ReportingTests(unittest.TestCase):
@@ -96,7 +96,7 @@ class ReportingTests(unittest.TestCase):
         self.assertFalse((self.root/'missing-on-purpose').exists())
     def test_recovery_inventory_fallback_preserves_latest_append_order(self):
         state={'tasks':{'task':{'files':{'a':{'versions':[{'path':name,'created':'2026-10-11T00:00:00Z'} for name in ('old','new')]}}}}}
-        with patch.dict(sys.modules,{'recovery':None}):_,preview,_=reporting.recovery_rows(state,{})
+        with patch.dict(sys.modules,{'configbackup_lib.recovery.recovery':None}):_,preview,_=reporting.recovery_rows(state,{})
         self.assertEqual(preview[0]['version']['path'],'new');self.assertIn('no restore validation',preview[0]['status'])
 
 
@@ -175,7 +175,7 @@ class ScheduleObservationTests(unittest.TestCase):
 
 class ExposureCorrelationTests(unittest.TestCase):
     def test_iis_windows_listener_service_and_certificate_correlate(self):
-        from exposure_review import evidence,runtime,correlate
+        from configbackup_lib.engine.exposure_review import evidence,runtime,correlate
         configured=evidence('windows-components/certificates/stores/x/configuration.json',[{'thumbprint':'A'*40,'not_after':'2026-10-10T00:00:00Z'}])
         configured+=evidence('windows-components/certificates/bindings/iis/configuration.json',[{'site':'web','binding':'*:443:example.invalid','certificate_hash':'A'*40}])
         configured+=evidence('services/services.json',[{'Name':'W3SVC','PathName':'"C:\\Windows\\server.exe" -password secret-never-read'}])
@@ -183,11 +183,11 @@ class ExposureCorrelationTests(unittest.TestCase):
         rows=correlate('host',configured,facts,mon.timestamp('2026-10-11T00:00:00Z'))
         self.assertEqual(rows[0]['certificate_status'],'expired');self.assertEqual(rows[0]['service_candidates'],['W3SVC']);self.assertEqual(rows[0]['listener_evidence'],'observed');self.assertIn('unknown',rows[0]['reachability']);self.assertNotIn('secret-never-read',json.dumps(rows))
     def test_cross_source_unmatched_no_ownership_or_reachability_claim(self):
-        from exposure_review import correlate
+        from configbackup_lib.engine.exposure_review import correlate
         rows=correlate('host',[],[{'kind':'observed_endpoint','address':'127.0.0.1','port':8080,'protocol':'tcp'}],0)
         self.assertEqual(rows[0]['binding_scope'],'loopback');self.assertEqual(rows[0]['entity'],'unmatched listener')
     def test_linux_and_macos_runtime_field_parsing(self):
-        from exposure_review import runtime
+        from configbackup_lib.engine.exposure_review import runtime
         linux=runtime({'platform':'linux','datasets':{'listeners':'tcp LISTEN 0 128 127.0.0.1:5432 0.0.0.0:* users:(("postgres",pid=12,fd=3))'}})
         self.assertEqual(linux[0]['port'],5432);self.assertEqual(linux[0]['process'],'postgres')
         mac=runtime({'platform':'darwin','datasets':{'tcp-listeners':'p42\ncservice\nf3\nn*:8443\n'}})
@@ -195,7 +195,7 @@ class ExposureCorrelationTests(unittest.TestCase):
         udp=runtime({'platform':'darwin','datasets':{'udp-endpoints':'p42\ncservice\nn127.0.0.1:1234->127.0.0.1:5678\n'}})
         self.assertEqual(udp[0]['port'],1234);self.assertEqual(udp[0]['address'],'127.0.0.1')
     def test_container_and_web_bindings_have_no_fabricated_listener(self):
-        from exposure_review import evidence,correlate
+        from configbackup_lib.engine.exposure_review import evidence,correlate
         values=evidence('containers/docker/container/objects/a/configuration.json',{'Name':'web','host':{'PortBindings':{'80/tcp':[{'HostIp':'127.0.0.1','HostPort':'8080'}]}}})
         values+=evidence('web-servers/nginx/a/configuration.json',{'source':'/etc/nginx.conf','directives':[{'directive':'listen','arguments':['443','ssl'],'values_collected':True}]})
         rows=correlate('host',values,[],0)

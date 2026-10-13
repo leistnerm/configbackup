@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import powershell_policy as policy
-from startup_launcher import generate
-import configbackup as cb
+import configbackup_lib.configuration.powershell_policy as policy
+from configbackup_lib.engine.startup_launcher import generate
+import configbackup_lib.engine.configbackup as cb
 
 
 class PowerShellPolicyTests(unittest.TestCase):
@@ -40,9 +40,9 @@ class PowerShellPolicyTests(unittest.TestCase):
 
     def test_menu_edit_and_cancel(self):
         config = {}
-        with patch('configure.choice', return_value='Bypass'):policy.wizard(config)
+        with patch('configbackup_lib.ui.configure.choice', return_value='Bypass'):policy.wizard(config)
         self.assertEqual(config['options']['powershell_execution_policy'], 'Bypass')
-        with patch('configure.choice', return_value=None):policy.wizard(config)
+        with patch('configbackup_lib.ui.configure.choice', return_value=None):policy.wizard(config)
         self.assertEqual(config['options']['powershell_execution_policy'], 'Bypass')
 
     def test_task_child_receives_policy(self):
@@ -52,7 +52,7 @@ class PowerShellPolicyTests(unittest.TestCase):
             engine = cb.BackupEngine(cfg)
             original = policy.environment
             try:
-                with patch('powershell_policy.environment', side_effect=lambda config, env: original(config, env, platform='nt')), patch('configbackup.subprocess.run') as run:
+                with patch('configbackup_lib.configuration.powershell_policy.environment', side_effect=lambda config, env: original(config, env, platform='nt')), patch('configbackup_lib.engine.configbackup.subprocess.run') as run:
                     engine._run_subprocess({'name': 'test', 'executable': 'powershell.exe', 'arguments': ['-File', 'test.ps1']}, True)
                 self.assertEqual(run.call_args.kwargs['env']['PSExecutionPolicyPreference'], 'Bypass')
             finally:engine._close_logging()

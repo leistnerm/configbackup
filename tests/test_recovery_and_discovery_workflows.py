@@ -11,16 +11,16 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import yaml
-import change_policy
-import configbackup as cb
-import determinism
-import discovery_review as discovery
-import recovery_assets
-import recovery_maintenance as maintenance
-import schedule_discovery as sd
-import setup_recovery
-import task_lifecycle
-from completeness import publish as manifest_write
+from configbackup_lib.git import change_policy
+import configbackup_lib.engine.configbackup as cb
+from configbackup_lib.engine import determinism
+import configbackup_lib.engine.discovery_review as discovery
+from configbackup_lib.recovery import recovery_assets
+import configbackup_lib.recovery.recovery_maintenance as maintenance
+import configbackup_lib.engine.schedule_discovery as sd
+from configbackup_lib.recovery import setup_recovery
+from configbackup_lib.engine import task_lifecycle
+from configbackup_lib.engine.completeness import publish as manifest_write
 
 class RecoveryAndDiscoveryWorkflowTests(unittest.TestCase):
     def setUp(self):
@@ -94,7 +94,7 @@ class RecoveryAndDiscoveryWorkflowTests(unittest.TestCase):
     def test_encryption_roundtrip_tamper_wrong_password_and_nondeterminism(self):
         try:import cryptography
         except ImportError:self.skipTest('Optional cryptography dependency not installed')
-        import recovery_crypto as crypto
+        import configbackup_lib.recovery.recovery_crypto as crypto
         bundle=self.bundle();password='synthetic recovery passphrase';one=self.root/'one.cbrec';two=self.root/'two.cbrec'
         crypto.encrypt(bundle,one,password);crypto.encrypt(bundle,two,password);self.assertNotEqual(one.read_bytes(),two.read_bytes())
         with self.assertRaises(ValueError):crypto.decrypt(one,self.root/'bad','wrong recovery password')

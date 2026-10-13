@@ -13,10 +13,10 @@ import uuid
 from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[2]
 sys.path[:0]=[str(ROOT),str(ROOT/'collectors/postgresql')]
-from completeness import Coverage
+from configbackup_lib.engine.completeness import Coverage
 from collectors.common.canonicalize import convert
 from collectors.postgresql import collect_postgresql as pg
-from secret_scan import scan_bytes
+from configbackup_lib.git.secret_scan import scan_bytes
 
 
 def main():

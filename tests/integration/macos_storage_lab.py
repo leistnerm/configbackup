@@ -9,7 +9,7 @@ import argparse,json,plistlib,subprocess,sys,uuid
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2];sys.path[:0]=[str(ROOT),str(ROOT/'collectors/system')]
 from storage_inventory import collect
-from completeness import publish,Coverage
+from configbackup_lib.engine.completeness import publish,Coverage
 
 
 def execute(argv):
@@ -108,7 +108,7 @@ def main():
             inventory=json.loads((target/'storage/apple-raid/configuration.json').read_text())
             surviving=next(item for item in inventory['AppleRAIDSets'] if item['AppleRAIDSetUUID']==identity)
             assert len(surviving['Members'])==2 and sum(bool(m.get('BSD Name')) for m in surviving['Members'])>=1
-            from monitoring import run_monitor
+            from configbackup_lib.reporting.monitoring import run_monitor
             summary=run_monitor({'sources':[str(target/'telemetry/storage/health.json')],'consecutive':1},out/'health-report',deliver=False)
             assert any(a['rule']=='apple-raid-degraded' for a in summary['alerts'])
             results_checks=['member image detached and deleted','RAID UUID retained','both member UUIDs retained','surviving file readable','degraded health metric captured','degraded alert opened locally; no notification sent']

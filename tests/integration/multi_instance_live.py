@@ -5,8 +5,8 @@ Creates/removes only unique cbtest_* objects. Password comes from an environment
 import argparse, contextlib, io, json, os, subprocess, sys, uuid
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2];sys.path.insert(0,str(ROOT))
-import configbackup as cb
-from completeness import Coverage
+import configbackup_lib.engine.configbackup as cb
+from configbackup_lib.engine.completeness import Coverage
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)

@@ -18,11 +18,11 @@ import yaml
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-import configbackup as cb
-import configure_features
-import config_schema
-import reporting
-import recovery
+import configbackup_lib.engine.configbackup as cb
+from configbackup_lib.ui import configure_features
+from configbackup_lib.configuration import config_schema
+from configbackup_lib.reporting import reporting
+from configbackup_lib.recovery import recovery
 
 
 class ReportingEngineIntegrationTests(unittest.TestCase):
@@ -65,7 +65,7 @@ class ReportingEngineIntegrationTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('git'),'Local Git required')
     def test_monitor_failure_and_report_exception_are_independent_of_archive(self):
         self.config['monitoring']={'enabled':True,'required':False}
-        with patch('monitoring.run_monitor',side_effect=RuntimeError('synthetic monitor failure')),patch('reporting.run_reports',side_effect=OSError('synthetic report failure')) as builder:
+        with patch('configbackup_lib.reporting.monitoring.run_monitor',side_effect=RuntimeError('synthetic monitor failure')),patch('configbackup_lib.reporting.reporting.run_reports',side_effect=OSError('synthetic report failure')) as builder:
             code,engine=self.run_engine()
         builder.assert_called_once();self.assertEqual(code,0);self.assert_good_archives(engine,'setting=one\n')
         self.assertEqual(engine.results['monitoring'].status,'failed');self.assertEqual(engine.results['reporting'].status,'failed')
@@ -79,7 +79,7 @@ class ReportingEngineIntegrationTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('git'),'Local Git required')
     def test_change_report_failure_keeps_archive_git_monitoring_and_portal_working(self):
         self.config['monitoring']={'enabled':True,'required':False}
-        with patch('changes.write_report',side_effect=OSError('synthetic report write failure')):
+        with patch('configbackup_lib.reporting.changes.write_report',side_effect=OSError('synthetic report write failure')):
             code,engine=self.run_engine()
         self.assertEqual(code,0);self.assert_good_archives(engine,'setting=one\n')
         self.assertEqual(engine.results['change-report'].status,'failed');self.assertFalse(engine.results['change-report'].required)
@@ -99,12 +99,12 @@ class ReportingEngineIntegrationTests(unittest.TestCase):
         self.assertEqual(state,before)
     def test_dry_run_never_invokes_reporting_or_writes_outputs(self):
         self.config_path.write_text(yaml.safe_dump(self.config));engine=cb.BackupEngine(cb.ConfigLoader(self.config_path).load(),dry_run=True)
-        with patch('reporting.run_reports') as builder,contextlib.redirect_stdout(io.StringIO()):self.assertEqual(engine.run(),0)
+        with patch('configbackup_lib.reporting.reporting.run_reports') as builder,contextlib.redirect_stdout(io.StringIO()):self.assertEqual(engine.run(),0)
         builder.assert_not_called();self.assertFalse((self.root/'archive/_configbackup/review').exists())
     def test_reporting_wizard_retains_source_switches_and_selects_exposure(self):
         config={'reporting':{'enabled':False,'snapshots':[{'id':'host','path':'C:/collector','enabled':False}],'schedule_paths':['C:/schedules'],'runtime_paths':[{'id':'host','path':'C:/runtime.json','enabled':False}],'sections':{'exposure':False}}}
         selections=[True,False,False]
-        with patch('configure.boolean',side_effect=selections),patch('configure.ask',side_effect=lambda prompt,default=None,input_fn=None:default or ''),patch('configure_features.select_many',return_value=['coverage','exposure']),patch('configure.manage'):
+        with patch('configbackup_lib.ui.configure.boolean',side_effect=selections),patch('configbackup_lib.ui.configure.ask',side_effect=lambda prompt,default=None,input_fn=None:default or ''),patch('configbackup_lib.ui.configure_features.select_many',return_value=['coverage','exposure']),patch('configbackup_lib.ui.configure.manage'):
             configure_features.reporting_wizard(config)
         value=config['reporting'];reporting.validate(value)
         self.assertTrue(value['enabled']);self.assertEqual(value['output'],'${CONFIGBACKUP_ARCHIVE_ROOT}/_configbackup/review')

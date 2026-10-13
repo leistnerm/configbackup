@@ -10,10 +10,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import yaml
-import configbackup as cb
-import recovery_assets as ra
-import startup_launcher
-from recovery import plan_restore,recover
+import configbackup_lib.engine.configbackup as cb
+import configbackup_lib.recovery.recovery_assets as ra
+from configbackup_lib.engine import startup_launcher
+from configbackup_lib.recovery.recovery import plan_restore,recover
 
 
 class SetupAssetTests(unittest.TestCase):

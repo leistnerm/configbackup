@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.0
+
+- Fix secret prompt exposure, cancelled edits, symlink/junction journal handling, prune-only recovery and launcher encoding/cleanup.
+- Add undo/redo, typed settings, task/connection reference updates, launcher management, Windows readiness and explicit recovery/repair menus.
+- Move implementation to `configbackup_lib` while preserving runnable root commands and complete recovery/deployment exports.
+- Add native Windows launcher fixtures and expanded portable safety checks.
+
 ## 1.3.1
 
 - Explicit process-scoped PowerShell execution policy in the configurator, collector environments, diagnostics and generated Windows launchers.

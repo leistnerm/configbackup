@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run selected ConfigBackup 1.3.1 fixture tests without using a production configuration.
+"""Run selected ConfigBackup 1.4.0 fixture tests without using a production configuration.
 
 Creates a NEW local result folder. All fixture archives/repositories are temporary
 children of that folder. No live databases, policies, tasks, or remotes are used.
@@ -56,9 +56,11 @@ CASES += [('browser edits existing nested item and preserves unknown fields', 't
 
 CASES += [('missing worktree restores archive without rewriting branch', 'test_missing_pr_worktree_recovery.MissingPrWorktreeTests.test_missing_worktree_restores_archive_without_rewriting_branch', True), ('advanced branch blocks automatic undo but reset preserves evidence', 'test_missing_pr_worktree_recovery.MissingPrWorktreeTests.test_advanced_branch_blocks_automatic_undo_but_reset_preserves_evidence', True), ('corrupt evidence never partially restores', 'test_missing_pr_worktree_recovery.MissingPrWorktreeTests.test_corrupt_evidence_never_partially_restores', True), ('reset copy failure keeps active journal', 'test_missing_pr_worktree_recovery.MissingPrWorktreeTests.test_reset_copy_failure_keeps_active_journal', True), ('existing worktree uses normal rollback', 'test_missing_pr_worktree_recovery.MissingPrWorktreeTests.test_existing_worktree_uses_normal_rollback', True), ('reset requires acknowledgement before loading config', 'test_missing_pr_worktree_recovery.MissingPrWorktreeTests.test_reset_requires_acknowledgement_before_loading_config', True), ('engine keeps pr checkout until journal commit', 'test_missing_pr_worktree_recovery.MissingPrWorktreeTests.test_engine_keeps_pr_checkout_until_journal_commit', True), ('failed git publication retains worktree until journal commit', 'test_missing_pr_worktree_recovery.MissingPrWorktreeTests.test_failed_git_publication_retains_worktree_until_journal_commit', True), ('reset cli preserves corrupt journal and writes report', 'test_missing_pr_worktree_recovery.MissingPrWorktreeTests.test_reset_cli_preserves_corrupt_journal_and_writes_report', True), ('inherit preserves environment and does not mutate parent', 'test_powershell_policy.PowerShellPolicyTests.test_inherit_preserves_environment_and_does_not_mutate_parent', False), ('non windows unchanged and invalid values rejected', 'test_powershell_policy.PowerShellPolicyTests.test_non_windows_unchanged_and_invalid_values_rejected', False), ('launcher policy is before file and inherit is unchanged', 'test_powershell_policy.PowerShellPolicyTests.test_launcher_policy_is_before_file_and_inherit_is_unchanged', False), ('menu edit and cancel', 'test_powershell_policy.PowerShellPolicyTests.test_menu_edit_and_cancel', False), ('task child receives policy', 'test_powershell_policy.PowerShellPolicyTests.test_task_child_receives_policy', False)]
 
+CASES += [('cancel boolean preserves value', 'test_configuration_safety_workflows.ConfigurationSafetyTests.test_cancel_boolean_preserves_value', False), ('hidden mapping never becomes prompt default', 'test_configuration_safety_workflows.ConfigurationSafetyTests.test_hidden_mapping_never_becomes_prompt_default', False), ('symlink journal is refused without moving target', 'test_configuration_safety_workflows.ConfigurationSafetyTests.test_symlink_journal_is_refused_without_moving_target', False), ('committed missing checkout has same inspection and recovery', 'test_configuration_safety_workflows.ConfigurationSafetyTests.test_committed_missing_checkout_has_same_inspection_and_recovery', False), ('prune only needs no git checkout', 'test_configuration_safety_workflows.ConfigurationSafetyTests.test_prune_only_needs_no_git_checkout', False), ('archive only pending recovers in normal run context', 'test_configuration_safety_workflows.ConfigurationSafetyTests.test_archive_only_pending_recovers_in_normal_run_context', False), ('unicode windows launcher has bom and policy metadata', 'test_configuration_safety_workflows.ConfigurationSafetyTests.test_unicode_windows_launcher_has_bom_and_policy_metadata', False), ('failed launcher write leaves no partial file', 'test_configuration_safety_workflows.ConfigurationSafetyTests.test_failed_launcher_write_leaves_no_partial_file', False), ('launcher regeneration retains previous files', 'test_configuration_safety_workflows.ConfigurationSafetyTests.test_launcher_regeneration_retains_previous_files', False), ('launcher registration failure rolls back files', 'test_configuration_safety_workflows.ConfigurationSafetyTests.test_launcher_registration_failure_rolls_back_files', False), ('rename updates references and state identity', 'test_configuration_safety_workflows.ConfigurationSafetyTests.test_rename_updates_references_and_state_identity', False), ('undo redo and yaml error hide source', 'test_configuration_safety_workflows.ConfigurationSafetyTests.test_undo_redo_and_yaml_error_hide_source', False), ('windows readiness is read only and masks probe errors', 'test_configuration_safety_workflows.ConfigurationSafetyTests.test_windows_readiness_is_read_only_and_masks_probe_errors', False), ('all compatibility commands help outside install directory', 'test_package_layout.PackageLayoutTests.test_all_compatibility_commands_help_outside_install_directory', False), ('recovery distribution contains every internal module', 'test_package_layout.PackageLayoutTests.test_recovery_distribution_contains_every_internal_module', False), ('root import alias is same engine for compatibility', 'test_package_layout.PackageLayoutTests.test_root_import_alias_is_same_engine_for_compatibility', False)]
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--release", type=Path, required=True, help="Extracted configbackup-1.3.1 directory")
+    parser.add_argument("--release", type=Path, required=True, help="Extracted configbackup-1.4.0 directory")
     parser.add_argument("--output", type=Path, required=True, help="New local results directory")
     args = parser.parse_args()
     if sys.version_info < (3, 10):
@@ -92,7 +94,7 @@ def main():
     git_templates.mkdir()
     os.environ.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=str(git_config),
                       GIT_TEMPLATE_DIR=str(git_templates), GIT_TERMINAL_PROMPT="0")
-    payload = {"release": "1.3.1", "started_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+    payload = {"release": "1.4.0", "started_at": dt.datetime.now(dt.timezone.utc).isoformat(),
                "platform": platform.platform(), "python": sys.version,
                "test_kind": "synthetic local fixtures; no live Windows or database claim",
                "git_available": bool(shutil.which("git")), "results": []}
@@ -100,8 +102,8 @@ def main():
     fatal = None
     try:
         import configbackup
-        if configbackup.APP_VERSION != "1.3.1":
-            raise ValueError("Expected ConfigBackup 1.3.1")
+        if configbackup.APP_VERSION != "1.4.0":
+            raise ValueError("Expected ConfigBackup 1.4.0")
         import test_snapshot_safety
         for label, method, needs_git in CASES:
             row = {"check": label, "test": method}

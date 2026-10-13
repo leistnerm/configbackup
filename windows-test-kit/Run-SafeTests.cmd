@@ -1,7 +1,7 @@
 @echo off
 setlocal DisableDelayedExpansion
 title ConfigBackup - safe local workstation tests
-echo ConfigBackup 1.3.1 - safe local workstation tests
+echo ConfigBackup 1.4.0 - safe local workstation tests
 echo Optional prerequisite setup asks first. Tests do not change policy or upload data.
 echo.
 if not exist "%~dp0Run-WorkstationTests.py" goto missing

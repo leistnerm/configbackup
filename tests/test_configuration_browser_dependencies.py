@@ -6,20 +6,20 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfoNotFoundError
-import config_browser
-import config_dependencies as deps
-import reporting
+from configbackup_lib.ui import config_browser
+import configbackup_lib.ui.config_dependencies as deps
+from configbackup_lib.reporting import reporting
 
 class BrowserDependencyTests(unittest.TestCase):
     def test_browser_edits_existing_nested_item_and_preserves_unknown_fields(self):
         config={'tasks':[{'name':'existing','enabled':True,'source':'old','extension_setting':{'keep':7}}],'reporting':{'timezone':'UTC'}}
-        choices=iter(['tasks: (1 items)','0: existing (4 settings)','source: old','Back','Back','reporting: (1 settings)','timezone: UTC','Back','Back'])
+        choices=iter(['tasks: (1 items)','0: existing (4 settings)','source: old','Back','Back','reporting: (1 settings)','timezone: UTC','America/New_York','Back','Back'])
         def choose(prompt,values,*args):
             answer=next(choices)
             # Counts include an optional leading space for unnamed containers.
             match=next((v for v in values if v.strip()==answer),None)
             self.assertIsNotNone(match,(answer,values));return match
-        with patch('configure.choice',side_effect=choose),patch('configure.ask',side_effect=['new','America/New_York']),contextlib.redirect_stdout(io.StringIO()):config_browser.browse(config)
+        with patch('configbackup_lib.ui.configure.choice',side_effect=choose),patch('configbackup_lib.ui.configure.ask',side_effect=['new','America/New_York']),contextlib.redirect_stdout(io.StringIO()):config_browser.browse(config)
         self.assertEqual(config['tasks'][0]['source'],'new');self.assertEqual(config['tasks'][0]['extension_setting'],{'keep':7})
         self.assertEqual(config['reporting']['timezone'],'America/New_York')
 
@@ -32,11 +32,11 @@ class BrowserDependencyTests(unittest.TestCase):
             choose.seen=True;return 'Back'
         # Sensitive container returns without a nested menu.
         calls=iter([0,-1])
-        with patch('configure.choice',side_effect=lambda p,v,*a:v[next(calls)]),contextlib.redirect_stdout(output):config_browser.browse(config)
+        with patch('configbackup_lib.ui.configure.choice',side_effect=lambda p,v,*a:v[next(calls)]),contextlib.redirect_stdout(output):config_browser.browse(config)
         self.assertNotIn('PRIVATE-SENTINEL',output.getvalue());self.assertEqual(before,config)
 
     def test_timezone_database_failure_has_repair_instruction(self):
-        with patch('reporting.ZoneInfo',side_effect=ZoneInfoNotFoundError('fixture')):
+        with patch('configbackup_lib.reporting.reporting.ZoneInfo',side_effect=ZoneInfoNotFoundError('fixture')):
             with self.assertRaisesRegex(ValueError,'pip install tzdata'):reporting.validate({})
         with self.assertRaisesRegex(ValueError,'IANA time zone name'):reporting.validate({'timezone':'Invalid/Zone/Name'})
 

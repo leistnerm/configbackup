@@ -24,12 +24,12 @@ import uuid
 import zipfile
 from zoneinfo import ZoneInfo
 
-KIT_VERSION = "1.3.1"
+KIT_VERSION = "1.4.0"
 RELEASES = {
-    "configbackup-1.3.1.zip": "0525172db5fffe20ec86b0b6311f7b63104f23f1c4e5b50d4e99d0b979459859",
+    "configbackup-1.4.0.zip": "56d66c5b5c8fc7d767dd9c91a9d15397aaea2a4fed036f671496dbeb8afd813d",
     "configbackup-gpo-test-1.0.0.zip": "6e4a4919c7f1f6ab6a340dc34f3ff50c9bc99efc6ad87b45cd98da9e5226a973"
 }
-EXPECTED_CHECKS = 297
+EXPECTED_CHECKS = 313
 EXPECTED_GPO_FIXTURES = 42
 WINDOWS_COMPONENTS = ('iis','dns','dhcp','hyperv','certificates','dfs','nps','wef','wsus','adcs')
 WINDOWS_DETAILS = {'iis-extended':'iis','dns-policies':'dns','dhcp-reservation-options':'dhcp','hyperv-network':'hyperv','hyperv-replication':'hyperv'}
@@ -241,7 +241,7 @@ def overall(data):
     statuses = [row["status"] for row in data["prerequisites"] + data["stages"]]
     if "FAIL" in statuses:
         return "FAIL"
-    if any(s in ("INCOMPLETE", "NOT RUN") for s in statuses) or len(data["stages"]) != 3 + bool(data.get("requested_components")):
+    if any(s in ("INCOMPLETE", "NOT RUN") for s in statuses) or len(data["stages"]) != 4 + bool(data.get("requested_components")):
         return "INCOMPLETE"
     return "REVIEW" if "REVIEW" in statuses else "PASS"
 
@@ -462,8 +462,15 @@ def run_suite(kit, output, *, offline_only=False, users=(), execute=command, off
             data["gpo"] = result
             return dict(status=result["status"], detail="Three captures, 30 seconds apart; computer, process user and any requested additional user. Review actual policy coverage locally.")
 
+        def native_launcher():
+            if not windows:return dict(status="NOT RUN", detail="Native CMD/PowerShell launcher execution requires Windows.")
+            bootstrap="import sys,unittest;sys.path[:0]=[sys.argv[1],sys.argv[1]+'/tests'];r=unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromName('test_launcher_execution.LauncherExecutionTests.test_native_bat_launcher_exits_and_inherits_process_policy'));sys.exit(0 if r.wasSuccessful() and not r.skipped else 1)"
+            code=execute([test_python,"-I","-B","-c",bootstrap,str(release)],output,"native-launcher.txt",env,timeout=90)
+            return dict(status="PASS" if code==0 else "FAIL",detail="Generated launcher with Unicode/spaces, child policy and exit-code checks using a harmless fixture; no policy settings changed. See native-launcher.txt.")
+
         stage(f"Application fixtures ({EXPECTED_CHECKS})", offline)
         stage("GPO fixtures (42)", fixtures)
+        stage("Native Windows launcher fixture", native_launcher)
         stage("Read-only live GPO repeatability", live)
         if components:
             def component_captures():

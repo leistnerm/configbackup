@@ -1,13 +1,13 @@
 import copy,json,os,subprocess,sys,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
-from configbackup import ConfigLoader,BackupEngine,ConfigError
-from completeness import publish,section
-import database_connections as shared
-import database_diagnostics as diag
-import readiness
-import setup_checks
-import startup_launcher
+from configbackup_lib.engine.configbackup import ConfigLoader,BackupEngine,ConfigError
+from configbackup_lib.engine.completeness import publish,section
+import configbackup_lib.configuration.database_connections as shared
+import configbackup_lib.engine.database_diagnostics as diag
+from configbackup_lib.engine import readiness
+from configbackup_lib.engine import setup_checks
+from configbackup_lib.engine import startup_launcher
 
 class ReadinessTests(unittest.TestCase):
     def config(self,base):
@@ -15,7 +15,7 @@ class ReadinessTests(unittest.TestCase):
     def result(self,rows,status='complete'):
         return {'name':'test','observed_at':'2026-10-09T12:00:00+00:00','status':status,'connection':{'status':'connected','identity':'reader'},'sections':rows,'execution':{'platform':'fixture','effective_uid':123,'account':'reader'}}
     def test_sql_unicode_password_literal_is_blocked_without_exposing_value(self):
-        from secret_scan import scan_bytes
+        from configbackup_lib.git.secret_scan import scan_bytes
         for value in (b"CREATE LOGIN reader WITH PASSWORD=N'unicode-secret';",b"ALTER LOGIN reader WITH PASSWORD='a b c d';",b"CREATE LOGIN reader WITH PASSWORD=N'abc''d';"):
             findings=scan_bytes(value,'fixture.sql');self.assertTrue(findings);self.assertNotIn('unicode-secret',str(findings))
         self.assertFalse(scan_bytes(b"CREATE LOGIN reader WITH PASSWORD=@password;",'fixture.sql'))

@@ -9,14 +9,14 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import yaml
-import change_policy
-import configbackup as cb
-import discovery_review
-import recovery_assets
-import recovery_maintenance
-import reporting
-import schedule_discovery as sd
-from transaction_journal import Journal
+from configbackup_lib.git import change_policy
+import configbackup_lib.engine.configbackup as cb
+from configbackup_lib.engine import discovery_review
+from configbackup_lib.recovery import recovery_assets
+from configbackup_lib.recovery import recovery_maintenance
+from configbackup_lib.reporting import reporting
+import configbackup_lib.engine.schedule_discovery as sd
+from configbackup_lib.recovery.transaction_journal import Journal
 
 class DiscoveryAndSnapshotBoundaryTests(unittest.TestCase):
     def setUp(self):self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name).resolve()
@@ -85,23 +85,23 @@ class DiscoveryAndSnapshotBoundaryTests(unittest.TestCase):
         source=self.root/'source';source.write_text('x');cfg={'backup':{'root':str(self.root/'archive'),'include_configuration':False},'tasks':[{'name':'x','type':'file','source':str(source)}]};engine=cb.BackupEngine(cb.ConfigLoader(Path('unused'))._resolve(cfg));engine.state.task('x')['retired']=True;engine.state.save();self.assertEqual(engine.run(),0);self.assertEqual(engine.results['x'].status,'disabled')
     def test_poisoned_journal_cannot_silently_skip_persistence(self):
         archive=self.root/'archive';archive.mkdir();target=archive/'x';target.write_text('x');j=Journal(archive/'journal',[archive]);j.begin()
-        with patch('transaction_journal.atomic',side_effect=OSError(28,'full')):
+        with patch('configbackup_lib.recovery.transaction_journal.atomic',side_effect=OSError(28,'full')):
             with self.assertRaises(OSError):j.remember(target)
         with self.assertRaises(OSError):j.remember(target)
         with self.assertRaises(OSError):j.commit()
         self.assertEqual(target.read_text(),'x')
 
     def test_postgres_restriction_keys_are_comparison_only(self):
-        from completeness import publish,section
-        import determinism
+        from configbackup_lib.engine.completeness import publish,section
+        from configbackup_lib.engine import determinism
         paths=[]
         for name,key in [('one','ABC'),('two','DEF')]:
             path=self.root/name;path.mkdir();(path/'schema.sql').write_text('\\restrict '+key+'\nCREATE TABLE x(a int);\n\\unrestrict '+key+'\n');publish(path,[section(path,'schema.sql')]);paths.append(path)
         report=determinism.compare(paths);self.assertEqual(report['status'],'representation_only');self.assertNotEqual((paths[0]/'schema.sql').read_bytes(),(paths[1]/'schema.sql').read_bytes())
         (paths[1]/'schema.sql').write_text('\\restrict DEF\nCREATE TABLE x(a text);\n\\unrestrict DEF\n');publish(paths[1],[section(paths[1],'schema.sql')]);self.assertEqual(determinism.compare(paths)['status'],'changed')
     def test_fully_disabled_capture_is_not_a_determinism_pass(self):
-        from completeness import publish
-        import determinism
+        from configbackup_lib.engine.completeness import publish
+        from configbackup_lib.engine import determinism
         paths=[]
         for name in ('one','two'):
             path=self.root/name;path.mkdir();publish(path,[{'path':'db','status':'disabled','files':{}}]);paths.append(path)

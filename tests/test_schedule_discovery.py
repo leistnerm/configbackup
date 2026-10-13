@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
-import schedule_discovery as s
+import configbackup_lib.engine.schedule_discovery as s
 
 class ScheduleDiscoveryTests(unittest.TestCase):
     def test_windows_static_quoted_arguments_and_dynamic_rejection(self):

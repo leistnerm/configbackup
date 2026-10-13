@@ -6,8 +6,8 @@ from pathlib import Path
 import re
 import shlex
 import sys
-from completeness import section
-from sections import enabled
+from configbackup_lib.engine.completeness import section
+from configbackup_lib.engine.sections import enabled
 from storage_inventory import command, text, Unavailable, ordered_rows
 
 LINUX_SYSCTLS = (

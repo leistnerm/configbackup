@@ -1,11 +1,11 @@
 import copy, datetime as dt, json, plistlib, subprocess, tempfile, time, unittest
 from pathlib import Path
 from unittest.mock import patch
-import performance_report as p
-import native_recording as n
-import configuration_profiles as profiles
-import recovery_status
-import configbackup as cb
+import configbackup_lib.reporting.performance_report as p
+import configbackup_lib.engine.native_recording as n
+import configbackup_lib.configuration.configuration_profiles as profiles
+from configbackup_lib.recovery import recovery_status
+import configbackup_lib.engine.configbackup as cb
 BASE=dt.datetime(2026,10,1,tzinfo=dt.timezone.utc)
 def rows(count=12,host='h'):
     return [p.sample(host,'host','cpu.busy_percent','percent',BASE+dt.timedelta(seconds=i*15),BASE+dt.timedelta(seconds=(i+1)*15),20 if i<4 else 95) for i in range(count)]
@@ -113,7 +113,7 @@ class NativeRecordingControlTests(unittest.TestCase):
 class ProfileEvidenceTests(unittest.TestCase):
     def test_profiles_inheritance_origins_and_engine(self):
         cfg={'connections':{'pg':{'engine':'postgresql'}},'collection_profiles':{'enabled':{'engine':'postgresql','collection':{'include_history':False,'history_days':7},'max_scope_bytes':1000}}};task={'connection':'pg','profile':'enabled','collection':{'history_days':2}};runtime=profiles.resolve(task,cfg)
-        from config_schema import validate_types
+        from configbackup_lib.configuration.config_schema import validate_types
         validate_types(cfg);profiles.validate(cfg);self.assertFalse(runtime['collection']['include_history']);self.assertEqual(runtime['collection']['history_days'],2);origins=profiles.origins(task,runtime,cfg);self.assertEqual(origins['collection.history_days'],'task');self.assertEqual(origins['collection.include_history'],'profile:enabled');cfg['collection_profiles']['enabled']['engine']='sqlserver'
         with self.assertRaises(ValueError):profiles.resolve(task,cfg)
     def test_unused_invalid_profile_rejected(self):

@@ -9,9 +9,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import yaml
-import configbackup as cb
-from transaction_journal import Journal,sha
-from completeness import publish,section
+import configbackup_lib.engine.configbackup as cb
+from configbackup_lib.recovery.transaction_journal import Journal,sha
+from configbackup_lib.engine.completeness import publish,section
 
 class TransactionJournalTests(unittest.TestCase):
     def setUp(self):
@@ -37,7 +37,7 @@ class TransactionJournalTests(unittest.TestCase):
         self.assertEqual(outside.read_text(),'outside')
     def test_disk_full_before_journal_publish_does_not_authorize_mutation(self):
         target=self.archive/'x';target.write_text('old');j=self.journal();j.begin()
-        with patch('transaction_journal.atomic',side_effect=OSError(28,'No space')):
+        with patch('configbackup_lib.recovery.transaction_journal.atomic',side_effect=OSError(28,'No space')):
             with self.assertRaises(OSError):j.remember(target)
         self.assertEqual(target.read_text(),'old');self.assertEqual(self.journal().recover()['status'],'rolled_back')
     def test_committed_marker_keeps_final_files(self):
@@ -65,7 +65,7 @@ class TransactionJournalTests(unittest.TestCase):
         state=engine.state.path.read_bytes();paths={p.name:p.read_bytes() for p in (self.archive/'files').iterdir()};(source/'a').write_text('after')
         script="""import os,sys
 from pathlib import Path
-import configbackup as cb
+import configbackup_lib.engine.configbackup as cb
 original=cb.BackupEngine._store_one_file
 def crash(self,*a,**kw):
  result=original(self,*a,**kw)
@@ -73,7 +73,7 @@ def crash(self,*a,**kw):
 cb.BackupEngine._store_one_file=crash
 cb.main(['--config',sys.argv[1]])
 """
-        cp=subprocess.run([sys.executable,'-c',script,str(config)],cwd=Path(cb.__file__).parent,capture_output=True)
+        cp=subprocess.run([sys.executable,'-c',script,str(config)],cwd=__import__('configbackup_lib').APPLICATION_ROOT,capture_output=True)
         self.assertEqual(cp.returncode,97);self.assertTrue((self.directory/'pending.json').exists())
         # Reconciliation itself restores exact pre-run bytes; next collection can then advance.
         self.journal().recover();self.assertEqual(engine.state.path.read_bytes(),state);self.assertEqual({p.name:p.read_bytes() for p in (self.archive/'files').iterdir()},paths)
@@ -96,8 +96,8 @@ cb.main(['--config',sys.argv[1]])
         source=self.root/'source';source.write_text('old');config=self.root/'config.yaml'
         cfg={'backup':{'root':str(self.archive),'include_configuration':False},'tasks':[{'name':'file','type':'file','source':str(source),'destination':'file'}]};config.write_text(yaml.safe_dump(cfg))
         engine=cb.BackupEngine(cb.ConfigLoader(config).load());self.assertEqual(engine.run(),0);before=copy.deepcopy(engine.state.task('file')['files']);source.write_text('new')
-        script="import os,sys;from pathlib import Path;import configbackup as cb;original=cb.StateStore.save\ndef crash(self):\n original(self)\n os._exit(98)\ncb.StateStore.save=crash\ncb.main(['--config',sys.argv[1]])"
-        cp=subprocess.run([sys.executable,'-c',script,str(config)],cwd=Path(cb.__file__).parent,capture_output=True);self.assertEqual(cp.returncode,98)
+        script="import os,sys;from pathlib import Path;import configbackup_lib.engine.configbackup as cb;original=cb.StateStore.save\ndef crash(self):\n original(self)\n os._exit(98)\ncb.StateStore.save=crash\ncb.main(['--config',sys.argv[1]])"
+        cp=subprocess.run([sys.executable,'-c',script,str(config)],cwd=__import__('configbackup_lib').APPLICATION_ROOT,capture_output=True);self.assertEqual(cp.returncode,98)
         source.write_text('old');engine=cb.BackupEngine(cb.ConfigLoader(config).load());self.assertEqual(engine.run(),0)
         logical=next(iter(before));self.assertEqual(engine.state.task('file')['files'][logical]['versions'],before[logical]['versions']);self.assertFalse((self.directory/'pending.json').exists())
 
