@@ -24,12 +24,12 @@ import uuid
 import zipfile
 from zoneinfo import ZoneInfo
 
-KIT_VERSION = "1.2.0"
+KIT_VERSION = "1.3.0"
 RELEASES = {
-    "configbackup-1.2.0.zip": "94be864ff5b49845800217204167c88fc585120043cf694a0f576eac8b9e3517",
+    "configbackup-1.3.0.zip": "94be864ff5b49845800217204167c88fc585120043cf694a0f576eac8b9e3517",
     "configbackup-gpo-test-1.0.0.zip": "ccdcef46cf9803969059fc12d432a57bbaa56d5f247149a8f6ae860ade037a8a"
 }
-EXPECTED_CHECKS = 278
+EXPECTED_CHECKS = 283
 EXPECTED_GPO_FIXTURES = 42
 WINDOWS_COMPONENTS = ('iis','dns','dhcp','hyperv','certificates','dfs','nps','wef','wsus','adcs')
 WINDOWS_DETAILS = {'iis-extended':'iis','dns-policies':'dns','dhcp-reservation-options':'dhcp','hyperv-network':'hyperv','hyperv-replication':'hyperv'}
@@ -187,7 +187,7 @@ def windows_details():
     if os.name != "nt":
         return {"windows": False, "gpresult": None}
     import ctypes
-    buffer = ctypes.create_unicode_buffer(32788)
+    buffer = ctypes.create_unicode_buffer(32838)
     gpresult = None
     if ctypes.windll.kernel32.GetWindowsDirectoryW(buffer, len(buffer)):
         for directory in ("Sysnative", "System32"):

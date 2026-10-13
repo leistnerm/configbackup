@@ -184,6 +184,8 @@ def ready(dependency,report):
 
 
 def install(dependency,*,venv=None,wheelhouse=None,input_fn=input,execute=None,discover_fn=None):
+    if execute is None and getattr(input_fn,'console_ui',False):
+        execute=lambda *a,**kw:input_fn.run_external(lambda:subprocess.run(*a,**kw))
     execute=execute or subprocess.run;discover_fn=discover_fn or discover
     before=discover_fn()
     if dependency!='python-packages' and ready(dependency,before):return {'status':'verified','already_present':True,'discovery':before}

@@ -55,7 +55,11 @@ def validate(config):
     zone=config.get('timezone','UTC')
     if not isinstance(zone,str) or not zone.strip():raise ValueError('reporting.timezone must be an IANA time zone name')
     try:ZoneInfo(zone)
-    except (ValueError,ZoneInfoNotFoundError) as exc:raise ValueError('reporting.timezone must be an available IANA time zone name') from exc
+    except (ValueError,ZoneInfoNotFoundError) as exc:
+        try:ZoneInfo('UTC')
+        except ZoneInfoNotFoundError:
+            raise ValueError('IANA timezone data is unavailable in this Python environment. Install it with python -m pip install tzdata, or use configurator > Python dependencies.') from exc
+        raise ValueError('reporting.timezone must be an available IANA time zone name') from exc
     for key in ('output','state','monitoring_path','integrity_path'):
         if key in config:path_value(config[key],'reporting.'+key,optional=key!='output')
     if 'csv_keys' in config:csv_keys(config['csv_keys'],'reporting.csv_keys')

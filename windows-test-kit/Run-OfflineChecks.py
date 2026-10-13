@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run selected ConfigBackup 1.2.0 fixture tests without using a production configuration.
+"""Run selected ConfigBackup 1.3.0 fixture tests without using a production configuration.
 
 Creates a NEW local result folder. All fixture archives/repositories are temporary
 children of that folder. No live databases, policies, tasks, or remotes are used.
@@ -52,10 +52,11 @@ CASES += [('preview secrets immutability', 'test_profile_and_report_workflows.Pr
 CASES += [('exact opt in and strict validation', 'test_sensitive_collection.SensitiveCollectionTests.test_exact_opt_in_and_strict_validation', False), ('git requires independent explicit approval', 'test_sensitive_collection.SensitiveCollectionTests.test_git_requires_independent_explicit_approval', False), ('collection without git approval preserves sensitive scope and collects normal', 'test_sensitive_collection.SensitiveCollectionTests.test_collection_without_git_approval_preserves_sensitive_scope_and_collects_normal', True), ('approved sensitive snapshot repeat and failed recovery leave normal ssis working', 'test_sensitive_collection.SensitiveCollectionTests.test_approved_sensitive_snapshot_repeat_and_failed_recovery_leave_normal_ssis_working', True), ('revoking git approval does not publish retained sensitive bytes', 'test_sensitive_collection.SensitiveCollectionTests.test_revoking_git_approval_does_not_publish_retained_sensitive_bytes', True), ('unrelated secret is still blocked', 'test_sensitive_collection.SensitiveCollectionTests.test_unrelated_secret_is_still_blocked', True), ('sensitive report preview never exposes opaque values', 'test_sensitive_collection.SensitiveCollectionTests.test_sensitive_report_preview_never_exposes_opaque_values', False), ('nonboolean manifest marker rejected', 'test_sensitive_collection.SensitiveCollectionTests.test_nonboolean_manifest_marker_rejected', False), ('allow sensitive keeps archive scan failure closed', 'test_sensitive_collection.SensitiveCollectionTests.test_allow_sensitive_keeps_archive_scan_failure_closed', False), ('git destination checks fetch push urls and github privacy', 'test_sensitive_collection.SensitiveCollectionTests.test_git_destination_checks_fetch_push_urls_and_github_privacy', False), ('postgres hash flag default and explicit', 'test_sensitive_collection.SensitiveCollectionTests.test_postgres_hash_flag_default_and_explicit', False), ('postgres opt in is leaf scoped and failures mask values', 'test_sensitive_collection.SensitiveCollectionTests.test_postgres_opt_in_is_leaf_scoped_and_failures_mask_values', False), ('child environment does not inherit ambient sensitive permissions', 'test_sensitive_collection.SensitiveCollectionTests.test_child_environment_does_not_inherit_ambient_sensitive_permissions', False)]
 CASES += [('sensitive manifests require new consumer version', 'test_sensitive_collection.SensitiveCollectionTests.test_sensitive_manifests_require_new_consumer_version', False), ('sensitive permissions cannot be inherited from defaults or connections', 'test_sensitive_collection.SensitiveCollectionTests.test_sensitive_permissions_cannot_be_inherited_from_defaults_or_connections', False), ('sensitive failed report drops cached value properties', 'test_sensitive_collection.SensitiveCollectionTests.test_sensitive_failed_report_drops_cached_value_properties', False), ('guided opt in requires confirmation and supports disable', 'test_sensitive_collection.SensitiveCollectionTests.test_guided_opt_in_requires_confirmation_and_supports_disable', False)]
 CASES += [('parameter sections require separate collection and git approvals', 'test_sensitive_collection.SensitiveCollectionTests.test_parameter_sections_require_separate_collection_and_git_approvals', False), ('parameter failure preserves archive git and allows siblings', 'test_sensitive_collection.SensitiveCollectionTests.test_parameter_failure_preserves_archive_git_and_allows_siblings', True)]
+CASES += [('browser edits existing nested item and preserves unknown fields', 'test_configuration_browser_dependencies.BrowserDependencyTests.test_browser_edits_existing_nested_item_and_preserves_unknown_fields', False), ('sensitive container and argument values are never displayed', 'test_configuration_browser_dependencies.BrowserDependencyTests.test_sensitive_container_and_argument_values_are_never_displayed', False), ('timezone database failure has repair instruction', 'test_configuration_browser_dependencies.BrowserDependencyTests.test_timezone_database_failure_has_repair_instruction', False), ('dependency check identifies missing timezone data', 'test_configuration_browser_dependencies.BrowserDependencyTests.test_dependency_check_identifies_missing_timezone_data', False), ('install is explicit uses current python and supported constraints', 'test_configuration_browser_dependencies.BrowserDependencyTests.test_install_is_explicit_uses_current_python_and_supported_constraints', False)]
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--release", type=Path, required=True, help="Extracted configbackup-1.2.0 directory")
+    parser.add_argument("--release", type=Path, required=True, help="Extracted configbackup-1.3.0 directory")
     parser.add_argument("--output", type=Path, required=True, help="New local results directory")
     args = parser.parse_args()
     if sys.version_info < (3, 10):
@@ -89,7 +90,7 @@ def main():
     git_templates.mkdir()
     os.environ.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=str(git_config),
                       GIT_TEMPLATE_DIR=str(git_templates), GIT_TERMINAL_PROMPT="0")
-    payload = {"release": "1.2.0", "started_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+    payload = {"release": "1.3.0", "started_at": dt.datetime.now(dt.timezone.utc).isoformat(),
                "platform": platform.platform(), "python": sys.version,
                "test_kind": "synthetic local fixtures; no live Windows or database claim",
                "git_available": bool(shutil.which("git")), "results": []}
@@ -97,8 +98,8 @@ def main():
     fatal = None
     try:
         import configbackup
-        if configbackup.APP_VERSION != "1.2.0":
-            raise ValueError("Expected ConfigBackup 1.2.0")
+        if configbackup.APP_VERSION != "1.3.0":
+            raise ValueError("Expected ConfigBackup 1.3.0")
         import test_snapshot_safety
         for label, method, needs_git in CASES:
             row = {"check": label, "test": method}

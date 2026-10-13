@@ -8,17 +8,21 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 import yaml
 from configbackup import ConfigLoader, ConfigError, redact_for_display
 
 
 def ask(prompt, default=None, input_fn=input):
+    if getattr(input_fn,'console_ui',False):return input_fn.ask(prompt,default)
     value=input_fn(prompt+(f' [{default}]' if default is not None else '')+': ').strip()
     return str(default) if not value and default is not None else value
 
 
 def boolean(prompt, default=True, input_fn=input):
+    if getattr(input_fn,'console_ui',False):
+        return input_fn.choose(prompt,['Yes','No'] if default else ['No','Yes'])=='Yes'
     while True:
         value=ask(prompt+' (yes/no)','yes' if default else 'no',input_fn).lower()
         if value in ('yes','y','true','1'): return True
@@ -27,6 +31,7 @@ def boolean(prompt, default=True, input_fn=input):
 
 
 def choice(prompt, values, input_fn=input):
+    if getattr(input_fn,'console_ui',False):return input_fn.choose(prompt,values)
     print(prompt)
     for n,value in enumerate(values,1):print(f'  {n}. {value}')
     while True:
@@ -350,6 +355,12 @@ def wizard(config,path,kind,input_fn=input):
     original=copy.deepcopy(config)
     from config_editor import fingerprint
     original_hash=fingerprint(path)
+    if getattr(input_fn,'console_ui',False):
+        from config_browser import summary
+        print(summary(config))
+        from config_dependencies import inspect as inspect_dependencies
+        for row in inspect_dependencies():
+            if row['status']!='ready':print('Dependency attention: '+row['name']+' — '+row['detail']+'. Open Python dependencies to repair.')
     while True:
         choices=['Tasks','Monitoring sources','Alert rules','Notification channels','Global switches','Show configuration','Validate','Save','Quit without saving'] if kind=='backup' else ['Sources','Report/analysis settings','Show configuration','Validate','Save','Quit without saving'] if kind=='schedule' else ['Monitoring sources','Alert rules','Notification channels','Global switches','Show configuration','Validate','Save','Quit without saving']
         if kind=='registry':choices=['Registry selections','Default registry selections','Show configuration','Validate','Save','Quit without saving']
@@ -357,12 +368,21 @@ def wizard(config,path,kind,input_fn=input):
         if kind=='backup':choices.extend(['Recovery files and export','Autodetect and guided setup','Verify and rehearse setup recovery','Discover files from scheduled jobs','Recovery and review workflows'])
         if kind=='backup':choices[10:10]=['HTML review reports','Optional collectors and discovery','Collection profiles','Effective preview','Preview changes']
         if kind=='backup':choices.extend(['Saved collection profiles','Performance recording and reports','Recovery readiness targets','Sensitive collection'])
+        choices.extend(['Current configuration','Python dependencies'])
         action=choice('ConfigBackup configuration editor',choices,input_fn)
-        if action in (None,'Quit without saving'):return False
+        if action in (None,'Quit without saving'):
+            if getattr(input_fn,'console_ui',False) and config!=original and not boolean('Discard unsaved configuration changes?',False,input_fn):continue
+            return False
         try:
             if kind=='backup' and config.get('monitoring') is None:config['monitoring']={}
             monitor=config.setdefault('monitoring',{}) if kind=='backup' else config.get('monitoring',config)
-            if action=='Sensitive collection':
+            if action=='Current configuration':
+                from config_browser import browse
+                browse(config,input_fn)
+            elif action=='Python dependencies':
+                from config_dependencies import wizard as dependency_wizard
+                dependency_wizard(input_fn)
+            elif action=='Sensitive collection':
                 from sensitive_data import wizard as sensitive_wizard
                 sensitive_wizard(config,input_fn)
             elif action=='Recovery files and export':
@@ -448,6 +468,9 @@ def wizard(config,path,kind,input_fn=input):
 
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
+    ui_mode=parser.add_mutually_exclusive_group()
+    ui_mode.add_argument('--plain',action='store_true',help='Use numbered text prompts instead of the full-screen interface')
+    ui_mode.add_argument('--console',action='store_true',help='Require the full-screen keyboard interface')
     parser.add_argument('--config',default='configbackup.yaml')
     parser.add_argument('--kind',choices=['backup','monitor','schedule','registry'],default='backup')
     parser.add_argument('--preview',action='store_true',help='Show resolved paths, switches, connection and report settings; no collection')
@@ -543,8 +566,23 @@ def main(argv=None):
         except (ValueError,OSError) as exc:print('Diagnostic error:',exc);return 2
         return 0 if result['status'] in ('complete','disabled') else 6 if result['status']=='partial' else 1
     if args.check:validate(config,args.kind);print('Configuration valid');return 0
-    if args.kind=='backup' and not config:config={'backup':{'root':ask('Backup archive root')},'tasks':[]}
-    try:wizard(config,path,args.kind)
+    def interact(input_fn=input):
+        if args.kind=='backup' and not config:config.update({'backup':{'root':ask('Backup archive root',input_fn=input_fn)},'tasks':[]})
+        return wizard(config,path,args.kind,input_fn)
+    interactive=sys.stdin.isatty() and sys.stdout.isatty() and os.environ.get('TERM')!='dumb'
+    if args.console and not interactive:parser.error('--console requires an interactive terminal')
+    if not args.plain and interactive:
+        try:from console_ui import ConsoleUI
+        except ImportError:
+            if args.console:parser.error('Console dependencies missing. Run: python -m pip install -r requirements-console.txt')
+            print('Console dependencies are missing. The numbered editor is still available.')
+            if boolean('Install console dependencies now',False):
+                from config_dependencies import install
+                if install(['prompt_toolkit'],update=True):
+                    print('Restart this command to use the console interface.');return 0
+            print('Using plain menus. You can also use Python dependencies from the main menu.')
+        else:return ConsoleUI(path).run(interact)
+    try:interact()
     except (EOFError,KeyboardInterrupt):print('\nCancelled; configuration file unchanged.')
     return 0
 

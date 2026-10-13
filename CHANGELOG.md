@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.0
+
+- Browse and edit existing nested configuration, with section/item inventory and preserved custom fields.
+- Explicit dependency checks/install/update options, including actionable timezone-data diagnostics.
+- Optional full-screen console configurator with arrow-key menus, search, checkbox selection, editable fields, colored header/shortcut bar and scrollable results.
+- Save, validation and change-preview shortcuts; explicit discard confirmation and numbered-menu fallback.
+- Console dependencies can be included in offline deployment packs. External installers temporarily suspend the screen.
+
 ## 1.2.0
 
 - Independently approved sensitive SSIS project and package parameter exports.

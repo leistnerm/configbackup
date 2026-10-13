@@ -1,4 +1,4 @@
-# Windows integration lab for ConfigBackup 1.2.0
+# Windows integration lab for ConfigBackup 1.3.0
 
 The Windows-specific behaviors below are **not live-certified by this release**. PowerShell syntax parsing and portable/local simulations are useful but do not substitute for a Windows host, actual service installations and the real scheduled account.
 
@@ -36,7 +36,7 @@ C:\ConfigBackupLab\venv\Scripts\python.exe -m pip install PyYAML
 Install-Module dbatools -Scope CurrentUser
 Get-Module -ListAvailable dbatools | Select-Object Name, Version, Path
 Get-Command pwsh, git, sqlpackage
-Set-Location C:\ConfigBackupLab\configbackup-1.2.0
+Set-Location C:\ConfigBackupLab\configbackup-1.3.0
 C:\ConfigBackupLab\venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 

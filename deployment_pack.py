@@ -51,7 +51,7 @@ def dependencies(features):
 
 
 def build(output,features=(),*,execute=subprocess.run):
-    if set(features)-{'encryption','performance'}:raise ValueError('Unknown optional deployment feature')
+    if set(features)-{'encryption','performance','console'}:raise ValueError('Unknown optional deployment feature')
     output=Path(output).absolute()
     if output.exists() or output.is_symlink():raise ValueError('Deployment pack output must be new')
     pins=dependencies(features);output.parent.mkdir(parents=True,exist_ok=True)
@@ -125,16 +125,19 @@ def wizard(input_fn=input):
     action=choice('Offline deployment pack',['Build for this platform','Verify pack','Rebuild in new environment','Back'],input_fn)
     if action in (None,'Back'):return
     if action=='Build for this platform':
-        features=[name for name in ('encryption','performance') if boolean('Include optional '+name+' dependencies',False,input_fn)]
+        features=[name for name in ('encryption','performance','console') if boolean('Include optional '+name+' dependencies',False,input_fn)]
         print('Downloads exact installed dependency versions as binary wheels. Does not install OS tools.')
-        result=build(ask('New pack directory',input_fn=input_fn),features)
+        target=ask('New pack directory',input_fn=input_fn)
+        result=input_fn.run_external(lambda:build(target,features)) if getattr(input_fn,'console_ui',False) else build(target,features)
     elif action=='Verify pack':result=verify(ask('Pack directory',input_fn=input_fn))
-    else:result=install(ask('Pack directory',input_fn=input_fn),ask('New virtual-environment directory',input_fn=input_fn))
+    else:
+        source=ask('Pack directory',input_fn=input_fn);target=ask('New virtual-environment directory',input_fn=input_fn)
+        result=input_fn.run_external(lambda:install(source,target)) if getattr(input_fn,'console_ui',False) else install(source,target)
     print(json.dumps(result,indent=2))
 
 
 def main(argv=None):
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('action',choices=['build','verify','install']);parser.add_argument('--pack',required=True);parser.add_argument('--venv');parser.add_argument('--feature',action='append',default=[],choices=['encryption','performance']);args=parser.parse_args(argv)
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('action',choices=['build','verify','install']);parser.add_argument('--pack',required=True);parser.add_argument('--venv');parser.add_argument('--feature',action='append',default=[],choices=['encryption','performance','console']);args=parser.parse_args(argv)
     if args.action=='install' and not args.venv:parser.error('--venv is required for install')
     result=build(args.pack,args.feature) if args.action=='build' else verify(args.pack) if args.action=='verify' else install(args.pack,args.venv)
     print(json.dumps(result,sort_keys=True,indent=2));return 0

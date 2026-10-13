@@ -4,6 +4,7 @@ import json
 
 
 def select_many(prompt,values,selected=(),input_fn=input):
+    if getattr(input_fn,'console_ui',False):return input_fn.select_many(prompt,values,selected)
     from configure import choice
     selected=set(selected)
     while True:
