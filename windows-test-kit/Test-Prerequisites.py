@@ -74,6 +74,7 @@ class PrerequisiteTests(unittest.TestCase):
             self.assertIn('ruamel.yaml>=0.18.6,<0.19',args)
             self.assertIn('PyYAML>=6.0,<7',args)
             self.assertIn('tzdata>=2024.1',args)
+            self.assertIn('prompt_toolkit>=3.0.52,<4',args)
             self.assertIn('--only-binary=:all:',args)
             self.assertEqual('--no-index' in args,wheels is not None)
 

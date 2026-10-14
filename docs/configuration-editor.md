@@ -10,7 +10,7 @@ Duplicating a collector also duplicates its direct directory archive consumers w
 
 When loading a real configuration file, ConfigBackup adds the `configbackup-settings` task. It saves the exact file in filesystem storage under `_configuration/<filename>` with up to 30 versions (at least three retained), regardless of Git defaults. Unchanged bytes do not create a new version. The task participates in verification and restore selection. Its failure is reported without stopping other tasks. Keep the configuration outside the archive to satisfy normal recursion protection.
 
-Turn it off through **Global switches**, or set:
+Turn it off through **Storage & security → Archive location & setup backup → include_configuration**, or set:
 
 ```yaml
 backup:

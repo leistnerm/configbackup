@@ -24,7 +24,7 @@ class ConsoleTests(unittest.TestCase):
                         for _ in range(400):
                             if ui.title==title and ui.pending is not None:break
                             await asyncio.sleep(.005)
-                        else:self.fail('Prompt unavailable: '+title+'; current: '+ui.title)
+                        else:self.fail('Prompt unavailable: '+title+'; current: '+ui.title+'; error: '+str(ui.error)+'; log: '+ui.log_text[-1500:])
                         await asyncio.sleep(.04)
                         screen=ui.app.renderer.last_rendered_screen
                         if screen:self.screens.append((title,screen))
@@ -33,7 +33,7 @@ class ConsoleTests(unittest.TestCase):
                             ui.app.output.get_size=lambda:Size(rows=resize[0],columns=resize[1])
                             ui.app.invalidate();await asyncio.sleep(.08)
                             self.resized_screen=ui.app.renderer.last_rendered_screen
-                        keys.send_text(send)
+                        keys.send_text(send(ui) if callable(send) else send)
                         await asyncio.sleep(.04)
                     await asyncio.wait_for(task,5)
                     self.assertIsNone(ui.error,str(ui.error))
@@ -71,7 +71,7 @@ class ConsoleTests(unittest.TestCase):
             path=Path(folder)/'config.yaml';path.write_text('sources: []\n# preserve comment\n')
             config={'sources':[]}
             def work(ui):configure.wizard(config,path,'schedule',ui)
-            self.drive(work,[('ConfigBackup configuration editor','report/analysis\r'),('Settings','\r'),('reports (JSON)','\x01{"enabled": true}\x0b\r'),('ConfigBackup configuration editor','\x1b[13~'),('ConfigBackup configuration editor','\x1b[12~'),('Save configuration','\r'),('Session complete','\r')])
+            self.drive(work,[('ConfigBackup configuration editor','monitoring\r'),('Monitoring & reports','report/analysis\r'),('Settings','\r'),('reports (JSON)','\x01{"enabled": true}\x0b\r'),('Monitoring & reports','\x1b[13~'),('Monitoring & reports','\x1b[12~'),('Monitoring & reports','\x1b[21~'),('Session complete','\r')])
             self.assertTrue(list(path.parent.glob('*.bak')))
             self.assertIn('# preserve comment',path.read_text())
             self.assertIn('enabled: true',path.read_text())
@@ -104,7 +104,7 @@ class ConsoleTests(unittest.TestCase):
         screen=self.screens[0][1]
         lines=[''.join(screen.data_buffer[y][x].char for x in range(80)) for y in range(40)]
         text='\n'.join(lines)
-        for label in ('CONFIGBACKUP','Configuration studio','F2 Save','Details & results','Tasks'):self.assertIn(label,text)
+        for label in ('CONFIGBACKUP','Configuration studio','Configuration','Details & results','Tasks'):self.assertIn(label,text)
         footer=''.join(self.resized_screen.data_buffer[23][x].char for x in range(100))
         self.assertIn('Ctrl+C',footer)
 

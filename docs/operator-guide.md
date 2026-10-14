@@ -1,6 +1,6 @@
 # ConfigBackup operator guide
 
-Use one complete 1.4.0 distribution and a private candidate configuration. The engine runs on Python 3.10+ on Windows, Linux and macOS; database and OS collectors require the appropriate native clients and permissions. See VALIDATION.md for the exact test matrix.
+Use one complete 1.5.0 distribution and a private candidate configuration. The engine runs on Python 3.10+ on Windows, Linux and macOS; database and OS collectors require the appropriate native clients and permissions. See VALIDATION.md for the exact test matrix.
 
 1. Install requirements.txt into a dedicated Python virtual environment. Encryption and the macOS performance fallback have separate optional requirements files. The menu's autodetect/setup checks can suggest clients and approved dependency installation paths.
 2. Run `python configure.py --config candidate.yaml`. Use shared connections, choose collector sections, and test available capabilities under the actual scheduled account. A section switch retains its settings. A denied or unavailable feature is not a successful collection.

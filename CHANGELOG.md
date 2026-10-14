@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5.0
+
+- Group configuration workflows by purpose, with fixed session commands and clearer profile labels.
+- Save, validate and review changes from nested menus and fields; retain navigation, input and cursor.
+- Keep completed edits on cancellation; protect drafts, failed writes and external file changes.
+- Add keyboard regression checks to the Windows kit, including explicit console dependency setup.
+
 ## 1.4.0
 
 - Fix secret prompt exposure, cancelled edits, symlink/junction journal handling, prune-only recovery and launcher encoding/cleanup.

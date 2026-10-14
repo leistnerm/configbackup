@@ -1,6 +1,6 @@
 # Current ConfigBackup documentation
 
-Start with the [operator guide](operator-guide.md) and [platform limitations](../VALIDATION.md). These feature guides describe ConfigBackup 1.4. See [sensitive collection](sensitive-collection.md) for explicit per-section collection and Git approvals.
+Start with the [operator guide](operator-guide.md) and [platform limitations](../VALIDATION.md). These feature guides describe ConfigBackup 1.5. See [sensitive collection](sensitive-collection.md) for explicit per-section collection and Git approvals.
 
 - [Configuration and menus](configuration-editor.md), [shared database connections](shared-connections.md), [saved profiles and effective settings](integrity-profiles-and-deployment.md#configuration-profiles).
 - [SQL Server](sql-server-collector.md), [PostgreSQL](postgresql-collector.md), [read-only access](read-only-access.md), [service coverage](sql-services.md).
@@ -14,4 +14,4 @@ The [console configurator](console-configurator.md) provides keyboard navigation
 
 For installation, existing configurations, PowerShell policy and SSIS setup, see the [setup walkthrough](setup-walkthrough.md).
 
-See [configuration workflows](configuration-workflows.md) and [package layout/upgrade notes](package-layout.md) for 1.4.
+See [configuration workflows](configuration-workflows.md) and [package layout/upgrade notes](package-layout.md) for 1.5.

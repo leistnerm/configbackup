@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import sys
 
-REQUIREMENTS = ["PyYAML>=6.0,<7", "tzdata>=2024.1", "ruamel.yaml>=0.18.6,<0.19"]
+REQUIREMENTS = ["PyYAML>=6.0,<7", "tzdata>=2024.1", "ruamel.yaml>=0.18.6,<0.19", "prompt_toolkit>=3.0.52,<4"]
 
 
 def choice(prompt, allowed, ask=input):
@@ -89,7 +89,7 @@ def prepare(output, inspect, record, *, python=None, wheelhouse=None,
     before = inspect(selected)
     if not all(row["status"] == "PASS" for row in before["checks"]):
         print("\nMissing Python packages/time-zone data.")
-        print("Optional: create a NEW test environment in this report folder and install PyYAML 6.x, ruamel.yaml 0.18.x and tzdata.")
+        print("Optional: create a NEW test environment in this report folder and install PyYAML 6.x, ruamel.yaml 0.18.x, tzdata and prompt_toolkit 3.x for keyboard tests.")
         print("Your existing Python environment will not be modified. Online mode uses the default index or approved index/proxy environment settings.")
         print("Local-wheel mode disables package indexes. Nothing downloads or installs unless you choose it.")
         answer = choice("Install: [O] online, [L] local approved wheels, [N] skip (default N): ", {"o", "l", "n"}, ask)

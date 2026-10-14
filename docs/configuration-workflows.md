@@ -10,13 +10,14 @@ for non-sensitive complex fields. Environment/variable entries retain literal ty
 Hidden secret containers are not copied into prompts. Use environment/vault
 references; existing inline secrets remain preserved without being displayed.
 
-Escape cancels a field; a cancelled multi-step text action discards that action's
-in-memory edits. **Undo last action** / **Redo last action** (F5/F6 at the main
-menu) operate on configuration changes, not completed installations or filesystem
-operations. **Undo last edit** is also available in the nested browser. History is
-bounded to 100 snapshots and stays in memory. The screen marks unsaved changes.
-**Effective preview** shows resolved task settings and their origins; removing a
-setting can restore inherited/default behavior. Save validates and keeps a backup.
+The menus are grouped by purpose; see the [console menu and shortcut guide](console-configurator.md).
+**Ctrl+S/F2 Save**, **F3 Validate** and **F4 Changes** work in submenus and fields.
+Save retains your location. **F5/F6 Undo/Redo** return to the main menu and ask
+before discarding unfinished input. Earlier accepted edits survive Escape.
+History is bounded to 100 accepted-change snapshots and stays in memory; it does
+not reverse installations or filesystem operations. The screen marks unsaved changes.
+Save validates, detects external edits and keeps a backup. Deferred saves for a
+new item happen only after completion, or explicitly save completed changes alone.
 
 **Tasks → Rename with references** retains the prior state identity and updates
 dependencies and exact task-scoped sensitive Git approvals after confirmation.

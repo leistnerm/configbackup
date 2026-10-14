@@ -14,7 +14,7 @@ def summary(config):
     return '\n'.join(lines)
 
 
-def browse(config,input_fn=input):
+def browse(config,input_fn=input,section=None):
     from configbackup_lib.ui.configure import choice,ask,boolean,json_value
     from configbackup_lib.configuration.config_schema import field_type
     from configbackup_lib.ui.editor_forms import scalar, EditHistory
@@ -87,4 +87,8 @@ def browse(config,input_fn=input):
             history.record(before,config)
             print('Updated '+path+'/'+name+' in memory. Use Save to write changes.')
     print(summary(config))
-    visit(config,'Current configuration')
+    if section is None:visit(config,'Current configuration')
+    else:
+        container=config.setdefault(section,{})
+        if not isinstance(container,(dict,list)):raise ValueError(section+' must be a mapping or list')
+        visit(container,section,(section,))

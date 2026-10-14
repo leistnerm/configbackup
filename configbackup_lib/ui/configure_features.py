@@ -1,8 +1,10 @@
 """Guided menus for optional collection and local report configuration."""
 import copy
 import json
+from configbackup_lib.ui.navigation import field_editor
 
 
+@field_editor
 def select_many(prompt,values,selected=(),input_fn=input):
     if getattr(input_fn,'console_ui',False):return input_fn.select_many(prompt,values,selected)
     from configbackup_lib.ui.configure import choice
@@ -18,6 +20,7 @@ def select_many(prompt,values,selected=(),input_fn=input):
 
 def reporting_wizard(config,input_fn=input):
     from configbackup_lib.ui.configure import ask,boolean,choice,manage
+    ask=field_editor(ask);boolean=field_editor(boolean)
     from configbackup_lib.reporting.reporting import SECTIONS
     report=config.setdefault('reporting',{})
     report['enabled']=boolean('Generate the offline HTML review portal',report.get('enabled',False),input_fn)
@@ -45,6 +48,7 @@ def reporting_wizard(config,input_fn=input):
 
 def optional_wizard(config,input_fn=input):
     from configbackup_lib.ui.configure import ask,choice
+    ask=field_editor(ask)
     from configbackup_lib.engine.collector_catalog import catalog,discover
     print(json.dumps(discover(),indent=2))
     tasks=[t for t in config.get('tasks',[]) if t.get('type')=='execute' and any(str(a).endswith('collect_system.py') for a in t.get('arguments',[]))]

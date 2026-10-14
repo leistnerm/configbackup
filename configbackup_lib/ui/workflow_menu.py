@@ -13,7 +13,7 @@ def wizard(config,path,input_fn=input):
             from configbackup_lib.recovery.deployment_pack import wizard as deployment_wizard
             deployment_wizard(input_fn);continue
         if action in ('Archive integrity and repair','Recovery status by scope'):
-            print('Uses saved configuration. Save main-menu edits first.')
+            print('Uses saved configuration. Use Ctrl+S/F2 to save edits first.')
             output=ask('Private report directory',input_fn=input_fn)
             if action=='Recovery status by scope':
                 from configbackup_lib.recovery.recovery_status import main
@@ -70,7 +70,7 @@ def wizard(config,path,input_fn=input):
             write_report(result,ask('Private report directory',input_fn=input_fn))
         elif action in ('Refresh recovery exports','Check export freshness'):
             from configbackup_lib.recovery.recovery_maintenance import refresh,freshness
-            saved=yaml.safe_load(Path(path).read_text());print('Uses saved configuration; save edits in the main menu first.')
+            saved=yaml.safe_load(Path(path).read_text());print('Uses saved configuration; use Ctrl+S/F2 to save edits first.')
             if action=='Refresh recovery exports':
                 directory=ask('Managed recovery export directory',input_fn=input_fn);secondary=ask('Optional separate copy directory (blank for none)',input_fn=input_fn)
                 password=__import__('getpass').getpass('Recovery passphrase: ') if secondary and boolean('Encrypt the secondary copy',True,input_fn) else None

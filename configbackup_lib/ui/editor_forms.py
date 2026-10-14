@@ -1,4 +1,5 @@
 """Typed configuration fields and cancellation without changing hidden values."""
+from configbackup_lib.ui.navigation import field_editor
 class EditCancelled(Exception):
     pass
 
@@ -11,6 +12,7 @@ ENUMS = {
 }
 
 
+@field_editor
 def edit_boolean(prompt, current, input_fn=input):
     from configbackup_lib.ui.configure import choice,ask
     if not getattr(input_fn,'console_ui',False):
@@ -24,6 +26,7 @@ def edit_boolean(prompt, current, input_fn=input):
     return current if selected in (None, 'Cancel') else selected == 'true'
 
 
+@field_editor
 def scalar(name, value, input_fn=input, *, literal=False):
     from configbackup_lib.ui.configure import ask, choice, json_value
     from configbackup_lib.configuration.config_schema import field_type
@@ -44,7 +47,12 @@ def scalar(name, value, input_fn=input, *, literal=False):
         return selected
     kind = type(value) if literal else field_type(str(name), value)
     if kind is bool:return edit_boolean(str(name), value, input_fn)
-    if kind in (int,float):return kind(ask(str(name),value,input_fn))
+    if kind in (int,float):
+        draft=value
+        while True:
+            draft=ask(str(name),draft,input_fn)
+            try:return kind(draft)
+            except ValueError:print('Enter a valid '+kind.__name__+'; the previous setting is unchanged.')
     if value is None:return json_value(str(name),None,input_fn)
     return ask(str(name),value,input_fn)
 

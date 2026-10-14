@@ -9,26 +9,70 @@ python configure.py --config configbackup.yaml
 
 On an interactive terminal, the configurator automatically opens a full-screen interface when prompt_toolkit is installed. It refreshes the current screen instead of appending menus. The existing configuration workflows, validation, comment preservation, atomic saving and timestamped backups remain in use. Nothing is saved merely by navigating or closing the interface.
 
+## Menu layout
+
+The backup configurator has seven areas, plus a Commands menu:
+
+| Area | Contents |
+|---|---|
+| Overview | Loaded configuration summary, effective settings and setup checks |
+| Backup & collection | Tasks, shared connections, optional collectors, section presets, reusable profiles and discovery |
+| Storage & security | Archive/setup-backup settings, task defaults, named retention policies, Git, sensitive collection and deletion |
+| Monitoring & reports | Sources, alerts, notification channels, monitoring settings, HTML and performance reports |
+| Setup & launchers | Guided setup, dependencies, launcher generation/management, PowerShell policy, Windows readiness, diagnostic profiles and permission scripts |
+| Recovery & maintenance | Journals, recovery exports, verification/rehearsal, readiness targets and maintenance workflows |
+| Advanced configuration | Nested configuration browser and redacted configuration display |
+
+Monitor, schedule and registry editors show only the relevant areas. Submenus keep
+your selected area open after an action. The numbered fallback uses the same groups;
+its Commands menu is reached through the main menu.
+
 ## Keyboard controls
 
 | Key | Action |
 |---|---|
+| Ctrl+S / F2 | Save from any idle configuration menu or field; stay in the editor |
+| F3 | Validate accepted configuration without altering unfinished input |
+| F4 | Show changes since the last successful save |
+| F5 / F6 | Undo / redo accepted configuration edits; return to the main menu |
+| F10 | Exit, confirming before discarding unsaved edits or unfinished input |
 | Up / Down | Select a menu item |
 | Home / End / Page Up / Page Down | Navigate long menus |
-| Type | Filter the current menu; Backspace removes filter characters |
+| Type | Filter a menu; Backspace removes filter characters |
 | Enter | Activate selection, accept a field, or finish a checklist |
-| Space | Toggle a checklist item |
-| Esc | Clear the menu filter, then go back; cancel checklist edits or decline a confirmation |
-| Tab | Switch between the current form/menu and the scrollable results panel |
-| Arrows / Page Up / Page Down in results | Scroll output, previews and validation messages |
-| F2 / F3 / F4 at the main menu | Save / Validate / Preview changes |
-| F5 / F6 at the main menu | Undo / Redo the last configuration action |
-| F10 at the main menu | Exit; asks before discarding changed configuration |
-| Ctrl+C twice | Cancel the editor and discard unsaved configuration edits |
+| Escape | Clear a menu filter, go back, or cancel unfinished input |
+| Tab | Switch between navigation/input and scrollable results |
+| Ctrl+C twice | Abandon unsaved editing and exit |
 
-Text fields support normal cursor editing, Home/End and paste. Escape cancels a text field; the current multi-step configuration action is rolled back in memory. Explicit side effects already performed, such as generating a launcher or approving an installation, are not undone by cancelling the configuration editor. While an operation is running, the interface waits for it to finish instead of abandoning a background write.
+The command bar stays visible in submenus. Commands are disabled while an operation
+or another command is running. On macOS, function keys may require Fn; Ctrl+S is an
+alternative for saving. Commands are not clickable buttons.
 
-The details panel keeps the most recent 50,000 characters of output in memory; it does not create a new diagnostic log file. Existing secret redaction and sensitive-collection confirmations still apply. Native installers and deployment operations temporarily return to the normal terminal, then restore the interface.
+Saving an active configuration value accepts and parses it first. Invalid input is
+not written. Save at an operational prompt preserves the unfinished prompt; it does
+not approve the operation. An unfinished new item offers **Finish creating this
+item** (save after completion) or **Save completed changes only** (keep editing the
+draft). Cancelling the item cancels its deferred save.
+
+Save validates, preserves a timestamped backup and writes atomically. It refuses to
+overwrite a file changed on disk since loading or the last save. Failed validation
+or writes retain accepted in-memory edits. Success updates the saved baseline and
+clears the unsaved indicator. Repeated saves work without reopening the editor.
+
+Validate and Changes preserve typed text, cursor position, checklist selections,
+menu filtering and results-panel focus. They inspect accepted configuration, not an
+unfinished draft. Undo/redo asks before discarding unfinished input and returns to
+the main menu so old submenu references cannot edit stale objects. Escape cancels
+unfinished input without discarding earlier accepted edits. Saved files are not
+reverted by Undo until another Save.
+
+Completed external actions, such as generating a launcher or approving an
+installation, are not reversed by undo or cancellation. During such operations,
+wait for completion; keyboard commands do not interrupt filesystem changes.
+
+The details panel keeps the most recent 50,000 characters of output in memory;
+it does not create a diagnostic log file. Secret redaction and sensitive-collection
+confirmations still apply. External installers temporarily use the normal terminal.
 
 ## Terminal compatibility
 

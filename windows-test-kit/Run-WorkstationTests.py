@@ -24,12 +24,12 @@ import uuid
 import zipfile
 from zoneinfo import ZoneInfo
 
-KIT_VERSION = "1.4.0"
+KIT_VERSION = "1.5.0"
 RELEASES = {
-    "configbackup-1.4.0.zip": "56d66c5b5c8fc7d767dd9c91a9d15397aaea2a4fed036f671496dbeb8afd813d",
+    "configbackup-1.5.0.zip": "42c5e895c7ec114a8aa3b3052f53cdc79953609d6ccc6d2d5c689775ba823e2e",
     "configbackup-gpo-test-1.0.0.zip": "6e4a4919c7f1f6ab6a340dc34f3ff50c9bc99efc6ad87b45cd98da9e5226a973"
 }
-EXPECTED_CHECKS = 313
+EXPECTED_CHECKS = 339
 EXPECTED_GPO_FIXTURES = 42
 WINDOWS_COMPONENTS = ('iis','dns','dhcp','hyperv','certificates','dfs','nps','wef','wsus','adcs')
 WINDOWS_DETAILS = {'iis-extended':'iis','dns-policies':'dns','dhcp-reservation-options':'dhcp','hyperv-network':'hyperv','hyperv-replication':'hyperv'}
@@ -172,6 +172,13 @@ def package_check():
         checks.append({"name": "IANA time zone data", "status": "PASS", "detail": "New York and UTC loaded"})
     except Exception as exc:
         checks.append({"name": "IANA time zone data", "status": "INCOMPLETE", "detail": str(exc)})
+    try:
+        import prompt_toolkit
+        version=importlib.metadata.version('prompt_toolkit')
+        good=tuple(int(x) for x in version.split('.')[:3]) >= (3,0,52) and version.split('.')[0]=='3'
+        checks.append({'name':'Console keyboard testing', 'status':'PASS' if good else 'INCOMPLETE', 'detail':'prompt_toolkit '+version})
+    except Exception:
+        checks.append({'name':'Console keyboard testing', 'status':'INCOMPLETE', 'detail':'Install prompt_toolkit>=3.0.52,<4 in the test interpreter.'})
     return checks
 
 

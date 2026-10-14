@@ -39,9 +39,10 @@ class ConsoleUI:
         self.path=Path(path)
         self.mode='busy';self.title='Opening configuration';self.items=[];self.selected=set()
         self.index=0;self.search='';self.history={};self.pending=None;self.loop=None
+        self.command_handler=None;self.checkpoint=None;self.command_active=False;self.queued_command=None;self.draft_active=False;self.field_active=False;self.save_after_draft=False
         self.log_text='';self.confirming=False;self.status='Ready';self.error=None;self.closed=False;self.dirty=False
         self.text=TextArea(multiline=False, wrap_lines=False, style='class:input')
-        self.log=TextArea(text='Select a configuration area to begin.\nChanges are written only after Save confirmation.',read_only=True,scrollbar=True,wrap_lines=True,style='class:log')
+        self.log=TextArea(text='Select a configuration area to begin.\nChanges are written only when you use Save.',read_only=True,scrollbar=True,wrap_lines=True,style='class:log')
         self.menu_control=FormattedTextControl(self.menu_text,focusable=True,get_cursor_position=lambda:Point(0,self.index))
         self.menu=Window(self.menu_control,right_margins=[ScrollbarMargin()],wrap_lines=False)
         active=Condition(lambda:self.mode in ('menu','multi'))
@@ -56,7 +57,7 @@ class ConsoleUI:
         self.root=HSplit([
             Window(FormattedTextControl([('class:brand','  CONFIGBACKUP  '),('class:header','Configuration studio')]),height=1,style='class:header'),
             Window(FormattedTextControl(lambda:'  '+clean(str(self.path.absolute()))+('  [UNSAVED]' if self.dirty else '')),height=1,style='class:muted'),
-            Window(FormattedTextControl(lambda:'  F2 Save   F3 Validate   F4 Changes   F5 Undo   F6 Redo   F10 Exit' if self.is_root else '  Configuration  /  '+clean(self.title)),height=1,style='class:bar'),
+            Window(FormattedTextControl(lambda:'  Ctrl+S/F2 Save  F3 Validate  F4 Changes  F5 Undo  F6 Redo  F10 Exit' if self.command_handler and self.mode!='busy' and not self.command_active else '  Commands unavailable during operations' if self.command_handler else '  Configuration  /  '+clean(self.title)),height=1,style='class:bar'),
             VSplit([Frame(left,title='Configuration',width=Dimension(weight=1)),Frame(self.log,title='Details & results',width=Dimension(weight=1))],padding=1),
             Window(FormattedTextControl(self.footer),height=2,style='class:footer',wrap_lines=True),
         ])
@@ -96,8 +97,8 @@ class ConsoleUI:
                     self.confirming=True;self.status='Press Ctrl+C again to discard unsaved edits and exit, or continue editing.'
                 else:self.resolve(KeyboardInterrupt())
             else:self.status='An operation is running. Wait for it to finish before exiting.'
-        for key,action in [('f2','Save'),('f3','Validate'),('f4','Preview changes'),('f5','Undo last action'),('f6','Redo last action'),('f10','Quit without saving')]:
-            kb.add(key,filter=Condition(lambda:self.is_root))(lambda e,a=action:self.resolve(a) if a in self.items else None)
+        for key,action in [('c-s','Save'),('f2','Save'),('f3','Validate'),('f4','Preview changes'),('f5','Undo last action'),('f6','Redo last action'),('f10','Quit without saving')]:
+            kb.add(key, eager=True)(lambda e,a=action:self.global_command(a))
         style=Style.from_dict({'header':'bg:#172b4d #ffffff','brand':'bg:#087e8b #ffffff bold','bar':'bg:#254566 #ffffff','subtitle':'#63d4db bold','muted':'#a6b4c7','selected':'bg:#087e8b #ffffff bold','log':'#cbd5e1','input':'bg:#24364a #ffffff','footer':'bg:#172b4d #cbd5e1','frame.border':'#42617d'})
         self.app=Application(layout=Layout(self.root,focused_element=self.menu),key_bindings=kb,style=style,full_screen=True,input=input,output=output)
 
@@ -128,11 +129,49 @@ class ConsoleUI:
         if mode=='multi':self.selected=set(default);self.original_selection=[v for v in values if v in self.selected]
         if mode=='text':self.text.text='' if default is None else str(default);self.text.buffer.cursor_position=len(self.text.text)
         self.app.layout.focus(self.text if mode=='text' else self.menu);self.app.invalidate()
+    def global_command(self, action):
+        if not self.command_handler or self.command_active or self.mode=='busy' or self.pending is None:
+            self.status='Commands are unavailable while an operation or command is running.';self.app.invalidate();return
+        if action=='Save' and ((self.mode in ('text','multi') and (self.field_active or self.draft_active)) or (self.mode=='menu' and self.field_active)):
+            self.queued_command=(action,self.title)
+            self.accept()  # The workflow parses/assigns the field before the next prompt.
+        else:
+            self.resolve(('__command__',action))
+
     def request(self, mode, prompt, values=(), default=None):
         if self.closed:raise EOFError()
-        future=concurrent.futures.Future()
-        self.loop.call_soon_threadsafe(self.present,mode,prompt,values,default,future)
-        return future.result()
+        if not self.command_active and self.checkpoint:self.checkpoint()
+        if self.save_after_draft and not self.draft_active and not self.command_active:
+            self.save_after_draft=False;self.execute_command('Save',mode)
+        if self.queued_command and not self.command_active:
+            action,previous=self.queued_command;self.queued_command=None
+            if mode=='text' and prompt==previous:
+                self.write_message('Save deferred: correct the invalid field first.\n')
+            else:self.execute_command(action, mode, draft=self.draft_active)
+        resume=None
+        while True:
+            future=concurrent.futures.Future()
+            self.loop.call_soon_threadsafe(self.present,mode,prompt,values,default,future)
+            if resume is not None:
+                def restore(state=resume):
+                    self.search,self.index,text,selected,cursor,was_log=state
+                    if mode=='text':self.text.text=text;self.text.buffer.cursor_position=cursor
+                    if mode=='multi':self.selected=selected
+                    if was_log:self.app.layout.focus(self.log)
+                    self.app.invalidate()
+                self.loop.call_soon_threadsafe(restore)
+            value=future.result()
+            if isinstance(value,tuple) and len(value)==3 and value[0]=='__command__':
+                _,action,resume=value
+                self.execute_command(action,mode,draft=self.draft_active)
+                continue
+            return value
+
+    def execute_command(self, action, mode, *, draft=False):
+        self.command_active=True
+        try:self.command_handler(action,mode,draft)
+        finally:self.command_active=False
+
     def choose(self, prompt, values):
         if not values:self.write_message('No options available.\n');return None
         return self.request('menu',prompt,values)
@@ -151,6 +190,8 @@ class ConsoleUI:
     def resolve(self,value):
         if self.pending is None:return
         if self.mode=='menu' and value in self.items:self.history[(self.title,tuple(self.items))]=self.items.index(value)
+        if isinstance(value,tuple) and value[:1]==('__command__',):
+            value=(*value,(self.search,self.index,self.text.text,set(self.selected),self.text.buffer.cursor_position,self.in_log))
         future=self.pending;self.pending=None;self.mode='busy';self.confirming=False;self.status='Processing selection'
         if isinstance(value,BaseException):future.set_exception(value)
         else:future.set_result(value)
@@ -170,7 +211,7 @@ class ConsoleUI:
             self.app.layout.focus(self.menu);self.app.invalidate()
             try:await asyncio.wrap_future(self.pending)
             except (EOFError,KeyboardInterrupt):pass
-            if not self.closed:self.app.exit()
+            if not self.closed and self.app.future is not None and not self.app.future.done():self.app.exit()
         task=asyncio.create_task(worker())
         try:await self.app.run_async()
         finally:

@@ -55,3 +55,25 @@ SQL Server login hash exports and PostgreSQL role hash exports were checked agai
 Portable tests do not establish native CMD, Windows PowerShell 5.1, Group Policy
 execution-policy precedence, scheduled-account or Windows reparse-point behavior.
 Use the Windows kit on the intended host and review its individual stage results.
+
+## 1.5.0 validation
+
+- macOS/Python 3.14: 550 application tests attempted; 549 passed, native CMD skipped.
+- Linux/Python 3.10: 550 attempted; 546 passed, four Windows/PowerShell tests skipped.
+- The suite includes 26 console/navigation tests using actual key dispatch through
+  synthetic terminal input. These cover nested saves, repeated saves, active text
+  and boolean fields, cursor/filter/focus preservation, invalid input, draft
+  completion/cancellation, external modification, write failure, exit cancellation,
+  undo/redo and blocked commands during operations.
+- Packaged kit: all 339 selected application checks and 42 GPO fixtures passed on
+  macOS. All 60 kit runner/prerequisite/component unit tests passed (33/15/12).
+- Existing snapshot failure-isolation and journal regression tests passed as part
+  of the full suite. Live database integration was not repeated for this UI release;
+  the live database results above belong to 1.4.0.
+- The generated PS1 execution fixture ran on macOS with PowerShell 7. Native CMD,
+  Windows PowerShell 5.1, real Windows terminal key handling, Group Policy and
+  scheduled-account behavior remain unverified.
+
+The kit requires prompt_toolkit for its console checks; optional prerequisite
+installation includes it only after explicit approval. macOS offline kit results
+remain INCOMPLETE overall because native Windows/GPO stages are not run.
