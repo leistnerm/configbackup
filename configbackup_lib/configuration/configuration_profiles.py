@@ -132,8 +132,11 @@ def manage(config,action,input_fn=input):
     key=choice('Profile field',sorted(FIELDS),input_fn)
     if not key:return
     print(help_text(key));print('Current: '+json.dumps(profiles[name].get(key)))
-    value=ask('Replacement YAML value (null removes this field)',input_fn=input_fn)
-    parsed=yaml.safe_load(value)
+    from configbackup_lib.ui.editor_forms import validated
+    def parse_value(text):
+        try:return yaml.safe_load(text)
+        except yaml.YAMLError:raise ValueError() from None
+    parsed=validated('Replacement YAML value (null removes this field)','',input_fn,parse_value,error='Invalid YAML; correct this field or cancel.')
     if parsed is None:candidate['collection_profiles'][name].pop(key,None)
     else:candidate['collection_profiles'][name][key]=parsed
     validate(candidate)

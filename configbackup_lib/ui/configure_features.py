@@ -20,12 +20,14 @@ def select_many(prompt,values,selected=(),input_fn=input):
 
 def reporting_wizard(config,input_fn=input):
     from configbackup_lib.ui.configure import ask,boolean,choice,manage
-    ask=field_editor(ask);boolean=field_editor(boolean)
+    from configbackup_lib.ui.editor_forms import text as ask, timezone, flag as boolean
     from configbackup_lib.reporting.reporting import SECTIONS
-    report=config.setdefault('reporting',{})
-    report['enabled']=boolean('Generate the offline HTML review portal',report.get('enabled',False),input_fn)
+    report=config.get('reporting',{})
+    enabled_value=boolean('Generate the offline HTML review portal',report.get('enabled',False),input_fn)
+    report['enabled']=enabled_value
+    config['reporting']=report
     report['output']=ask('Report directory','${CONFIGBACKUP_ARCHIVE_ROOT}/_configbackup/review' if not report.get('output') else report['output'],input_fn)
-    report['timezone']=ask('Display time zone (IANA)','UTC' if not report.get('timezone') else report['timezone'],input_fn)
+    report['timezone']=timezone('Display time zone (IANA)','UTC' if not report.get('timezone') else report['timezone'],input_fn)
     report['include_values']=boolean('Include sanitized configuration values in the local report',report.get('include_values',False),input_fn)
     from configbackup_lib.engine.sections import enabled
     selected=select_many('Choose report pages',list(SECTIONS),[k for k in SECTIONS if enabled(k,report.get('sections',{}))],input_fn)
@@ -48,7 +50,7 @@ def reporting_wizard(config,input_fn=input):
 
 def optional_wizard(config,input_fn=input):
     from configbackup_lib.ui.configure import ask,choice
-    ask=field_editor(ask)
+    from configbackup_lib.ui.editor_forms import text as ask
     from configbackup_lib.engine.collector_catalog import catalog,discover
     print(json.dumps(discover(),indent=2))
     tasks=[t for t in config.get('tasks',[]) if t.get('type')=='execute' and any(str(a).endswith('collect_system.py') for a in t.get('arguments',[]))]

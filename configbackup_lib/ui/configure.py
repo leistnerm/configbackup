@@ -13,7 +13,7 @@ import sys
 import tempfile
 import yaml
 from configbackup_lib.engine.configbackup import ConfigLoader, ConfigError, redact_for_display
-from configbackup_lib.ui.editor_forms import edit_boolean
+from configbackup_lib.ui.editor_forms import edit_boolean,integer,validated
 from configbackup_lib.ui.navigation import field_editor
 
 
@@ -30,7 +30,12 @@ def ask(prompt, default=None, input_fn=input):
 
 def boolean(prompt, default=True, input_fn=input):
     if getattr(input_fn,'console_ui',False):
-        return input_fn.choose(prompt,['Yes','No'] if default else ['No','Yes'])=='Yes'
+        values=['Yes','No'] if default else ['No','Yes']
+        answer=input_fn.choose_value(prompt,values,'Yes' if default else 'No') if hasattr(input_fn,'choose_value') else input_fn.choose(prompt,values)
+        if answer is None and getattr(input_fn,'field_active',False) and not getattr(input_fn,'command_active',False):
+            from configbackup_lib.ui.editor_forms import EditCancelled
+            raise EditCancelled()
+        return answer=='Yes'
     while True:
         value=ask(prompt+' (yes/no)','yes' if default else 'no',input_fn).lower()
         if value in ('yes','y','true','1'): return True
@@ -38,8 +43,10 @@ def boolean(prompt, default=True, input_fn=input):
         print('Choose yes or no.')
 
 
-def choice(prompt, values, input_fn=input):
-    if getattr(input_fn,'console_ui',False):return input_fn.choose(prompt,values)
+def choice(prompt, values, input_fn=input, *, current=None):
+    if getattr(input_fn,'console_ui',False):
+        if current is not None and hasattr(input_fn,'choose_value'):return input_fn.choose_value(prompt,values,current)
+        return input_fn.choose(prompt,values)
     print(prompt)
     for n,value in enumerate(values,1):print(f'  {n}. {value}')
     while True:
@@ -54,8 +61,13 @@ def json_value(prompt, value, input_fn=input):
     raw=json.dumps(value)
     while True:
         raw=ask(prompt+' (JSON)',raw,input_fn)
-        try:return json.loads(raw)
-        except ValueError as exc:print('Invalid JSON:',exc)
+        try:
+            value=json.loads(raw)
+            if getattr(input_fn,'console_ui',False):input_fn.field_error=''
+            return value
+        except ValueError:
+            if getattr(input_fn,'console_ui',False):input_fn.field_error='Invalid JSON; correct the field or press Esc.'
+            print('Invalid JSON; correct the field or press Esc.')
 
 
 def validate(config, kind='backup',path=None):
@@ -118,6 +130,7 @@ def save(config, path, kind='backup', expected_hash=_NO_EXPECTATION):
 
 
 def template_tasks(kind, input_fn=input):
+    from configbackup_lib.ui.editor_forms import text as ask, flag as boolean, selection as choice
     name=ask('Unique name',input_fn=input_fn)
     if not name:raise ValueError('Name is required')
     if kind=='Directory':
@@ -190,19 +203,39 @@ def edit_mapping(item,input_fn=input,blocked_fields=()):
                 item[field]=scalar(field,current if current is not None else '',input_fn)
 
 
-def manage(items, label, maker, input_fn=input,config=None):
+def test_mode(input_fn):
+    print('This check uses the current accepted configuration edits. Unfinished drafts are excluded.')
+    options=['Test current edits']
+    if getattr(input_fn,'save_configuration',None):options.append('Save and test')
+    selected=choice('Configuration for this check',options+['Back'],input_fn)
+    if selected in (None,'Back'):return False
+    if selected=='Save and test':
+        if not input_fn.save_configuration():print('Check not run: configuration was not saved.');return False
+        print('Testing the just-saved configuration.')
+    return True
+
+
+def manage(items, label, maker, input_fn=input,config=None,attach=None,path=None):
     while True:
-        action=choice(label,['Add','Edit','Duplicate','Enable/disable','Remove','Back']+(['Rename with references'] if config is not None else []),input_fn)
-        if action in (None,'Back'):return
-        if action=='Add':
+        if attach and items:attach(items)
+        labels=[f'{i+1}: {x.get("name",x.get("id",x.get("host",x.get("path","item"))))} ({"enabled" if x.get("enabled",True) else "disabled"})' for i,x in enumerate(items)]
+        selected=choice(label,labels+['Add','Back'],input_fn)
+        if selected in (None,'Back'):return
+        if selected=='Add':
             from configbackup_lib.ui.navigation import draft
             with draft(input_fn):created=maker(input_fn)
             items.extend(created);continue
-        if not items:print('No items yet.');continue
-        labels=[f'{i+1}: {x.get("name",x.get("id",x.get("host",x.get("path","item"))))} ({"enabled" if x.get("enabled",True) else "disabled"})' for i,x in enumerate(items)]
-        selected=choice('Choose item',labels,input_fn)
-        if selected is None:continue
         index=labels.index(selected)
+        actions=['Edit','Enable/disable','Duplicate']
+        if config is not None:actions+=['Rename with references']
+        if config is not None and path is not None and items[index].get('connection'):actions+=['Test']
+        action=choice(label+' / '+labels[index],actions+['Remove','Back'],input_fn)
+        if action in (None,'Back'):continue
+        if action=='Test':
+            if test_mode(input_fn):
+                from configbackup_lib.engine.readiness import run_task,display
+                display(run_task(config,path,items[index]['name'],progress=print))
+            continue
         if action=='Rename with references':
             from configbackup_lib.configuration.configuration_links import rename,references
             old=items[index]['name'];print('Dependent tasks: '+', '.join(references(config,'task',old)))
@@ -228,11 +261,12 @@ def manage(items, label, maker, input_fn=input,config=None):
 
 
 def new_channel(input_fn=input):
+    from configbackup_lib.ui.editor_forms import text as ask, flag as boolean, selection as choice
     kind=choice('Notification method',['smtp','webhook','ntfy','heartbeat'],input_fn)
     if kind is None:return []
     value={'id':ask('Unique channel name',kind,input_fn),'type':kind,'enabled':True}
     if kind=='smtp':
-        value.update(host=ask('SMTP host',input_fn=input_fn),port=int(ask('Port','587',input_fn)),tls=choice('Encryption',['starttls','ssl'],input_fn) or 'starttls',
+        value.update(host=ask('SMTP host',input_fn=input_fn),port=integer('Port',587,input_fn,1,65535),tls=choice('Encryption',['starttls','ssl'],input_fn) or 'starttls',
                      **{'from':ask('From address',input_fn=input_fn),'to':[x.strip() for x in ask('Recipient addresses (comma separated)',input_fn=input_fn).split(',') if x.strip()]})
         value['username_env']=ask('SMTP username environment variable','CONFIGBACKUP_SMTP_USER',input_fn)
         value['password_env']=ask('SMTP password environment variable','CONFIGBACKUP_SMTP_PASSWORD',input_fn)
@@ -249,19 +283,24 @@ def new_channel(input_fn=input):
 
 
 def new_rule(input_fn=input):
+    from configbackup_lib.ui.editor_forms import text as ask, flag as boolean, selection as choice
     return [{'id':ask('Unique rule ID',input_fn=input_fn),'enabled':True,'metric':ask('Metric pattern (see dashboard)',input_fn=input_fn),
-             'op':choice('Trigger when value is',['gt','lt'],input_fn) or 'gt','warning':float(ask('Warning threshold',input_fn=input_fn)),
-             'critical':float(ask('Critical threshold',input_fn=input_fn)),'consecutive':int(ask('Consecutive observations','2',input_fn))}]
+             'op':choice('Trigger when value is',['gt','lt'],input_fn) or 'gt','warning':validated('Warning threshold','',input_fn,float,error='Enter a numeric warning threshold.'),
+             'critical':validated('Critical threshold','',input_fn,float,error='Enter a numeric critical threshold.'),'consecutive':integer('Consecutive observations',2,input_fn,1)}]
 
 
 def new_source(input_fn=input,schedule=False):
+    from configbackup_lib.ui.editor_forms import text as ask, flag as boolean, selection as choice
     source={'enabled':True,'path':ask('Snapshot directory' if schedule else 'Telemetry health.json path/glob',input_fn=input_fn),
             'host':ask('Host label',input_fn=input_fn)}
-    if schedule:source.update(type=choice('Source type',['sql','postgresql','system'],input_fn),timezone=ask('IANA timezone','UTC',input_fn))
+    if schedule:
+        from zoneinfo import ZoneInfo
+        source.update(type=choice('Source type',['sql','postgresql','system'],input_fn),timezone=validated('IANA timezone','UTC',input_fn,lambda value:(ZoneInfo(value),value)[1],error='Enter an installed IANA timezone name.'))
     return [source]
 
 
 def new_registry(input_fn=input):
+    from configbackup_lib.ui.editor_forms import text as ask, flag as boolean, selection as choice
     return [{'id':ask('Unique selection ID',input_fn=input_fn),'enabled':True,
        'path':ask(r'Exact key (e.g. HKLM\SOFTWARE\Vendor\Application)',input_fn=input_fn),
        'view':choice('Registry view',['64','32'],input_fn) or '64',
@@ -311,6 +350,7 @@ def diagnostic_profile(input_fn=input):
 
 
 def _diagnostic_profile(input_fn=input):
+    from configbackup_lib.ui.editor_forms import text as ask, flag as boolean, selection as choice
     engine=choice('Database engine',['sqlserver','postgresql'],input_fn)
     if not engine:return None
     profile={'name':ask('Unique connection/profile name',input_fn=input_fn),'engine':engine,
@@ -325,7 +365,7 @@ def _diagnostic_profile(input_fn=input):
             profile['password_env']=ask('Existing password environment variable name (not its value)','CONFIGBACKUP_SQL_PASSWORD',input_fn)
     else:
         profile['host']=ask('Host (blank to use libpq defaults)',input_fn=input_fn)
-        profile['port']=int(ask('Port','5432',input_fn))
+        profile['port']=integer('Port',5432,input_fn,1,65535)
         profile['user']=ask('User (blank to use libpq defaults)',input_fn=input_fn)
         profile['service']=ask('libpq service name (blank if unused)',input_fn=input_fn)
         profile['bin_dir']=ask('PostgreSQL client bin directory (blank for PATH)',input_fn=input_fn)
@@ -336,7 +376,7 @@ def _diagnostic_profile(input_fn=input):
     profile['schema']=boolean('Test real schema extraction (may take several minutes)',True,input_fn)
     profile['include_health']=boolean('Test optional health queries',False,input_fn)
     profile['include_history']=boolean('Test scheduler history reads',False,input_fn)
-    profile['timeout']=int(ask('Overall collector timeout in seconds','600',input_fn))
+    profile['timeout']=integer('Overall collector timeout in seconds',600,input_fn,1)
     from configbackup_lib.engine.database_diagnostics import validate as validate_diagnostic
     validate_diagnostic(profile)
     return profile
@@ -345,9 +385,10 @@ def _diagnostic_profile(input_fn=input):
 def diagnostics_wizard(config,input_fn=input):
     from configbackup_lib.configuration.powershell_policy import environment as policy_environment
     from configbackup_lib.engine.database_diagnostics import diagnose,display,write_report
-    profiles=config.setdefault('database_diagnostics',[])
+    profiles=config.get('database_diagnostics',[])
     print('Tests use a separate diagnostic profile: match its identity, database filters and section switches to your collector. Custom task wrappers are not run.')
     while True:
+        if profiles:config['database_diagnostics']=profiles
         action=choice('Database connection tests',['Add profile','Edit profile','Test profile','Remove profile','Back'],input_fn)
         if action in (None,'Back'):return
         if action=='Add profile':
@@ -362,6 +403,7 @@ def diagnostics_wizard(config,input_fn=input):
         if action=='Edit profile':edit_mapping(profiles[index],input_fn)
         elif action=='Remove profile':profiles.pop(index)
         else:
+            if not test_mode(input_fn):continue
             result=diagnose(profiles[index],progress=print,environment=policy_environment(config));display(result)
             path=ask('Optional new JSON report path (blank to keep only on screen)',input_fn=input_fn)
             if path:write_report(result,path);print('Saved diagnostic report: '+path)
@@ -369,25 +411,32 @@ def diagnostics_wizard(config,input_fn=input):
 
 def shared_connections_wizard(config,path,input_fn=input):
     from configbackup_lib.engine.readiness import run_task,display
-    connections=config.setdefault('connections',{})
+    connections=config.get('connections',{})
     while True:
-        action=choice('Shared connections',['Add connection','Edit connection','Rename connection','Test managed task','Remove connection','Back'],input_fn)
-        if action in (None,'Back'):return
-        if action=='Add connection':
+        if connections:config['connections']=connections
+        labels={f'{i+1}: {name}':name for i,name in enumerate(connections)}
+        selected=choice('Shared connections',list(labels)+['Add connection','Back'],input_fn)
+        name=labels.get(selected,selected)
+        if selected in (None,'Back'):return
+        if selected=='Add connection':
             profile=diagnostic_profile(input_fn)
             if profile:
-                name=profile.pop('name')
-                if not name or name in connections:raise ValueError('Choose a new nonempty connection name')
-                connections[name]=profile
-        elif action=='Test managed task':
-            names=[t['name'] for t in config.get('tasks',[]) if t.get('connection')]
-            if not names:print('Add a SQL Server/PostgreSQL task using an existing shared connection first.');continue
-            name=choice('Managed task',names,input_fn)
-            if name:display(run_task(config,path,name,progress=print))
+                new_name=profile.pop('name')
+                if not new_name or new_name in connections:raise ValueError('Choose a new nonempty connection name')
+                connections[new_name]=profile
+            continue
+        action=choice('Connection / '+name,['Edit connection','Rename connection','Test managed task','Duplicate connection','Remove connection','Back'],input_fn)
+        if action in (None,'Back'):continue
+        if action=='Duplicate connection':
+            new_name=ask('New connection name',name+'-copy',input_fn)
+            if not new_name or new_name in connections:raise ValueError('Choose a new nonempty name')
+            connections[new_name]=copy.deepcopy(connections[name]);continue
+        if action=='Test managed task':
+            names=[t['name'] for t in config.get('tasks',[]) if t.get('connection')==name]
+            if not names:print('No managed tasks use this connection yet. Add a task to test its exact collection settings.');continue
+            task_name=choice('Managed task',names,input_fn)
+            if task_name and test_mode(input_fn):display(run_task(config,path,task_name,progress=print))
         else:
-            if not connections:print('No shared connections configured.');continue
-            name=choice('Connection',list(connections),input_fn)
-            if name is None:continue
             if action=='Edit connection':edit_mapping(connections[name],input_fn)
             elif action=='Rename connection':
                 from configbackup_lib.configuration.configuration_links import rename,references
@@ -405,7 +454,7 @@ def wizard(config,path,kind,input_fn=input):
     try:return _wizard(config,path,kind,input_fn)
     finally:
         if getattr(input_fn,'console_ui',False):
-            input_fn.command_handler=None;input_fn.checkpoint=None;input_fn.queued_command=None
+            input_fn.command_handler=None;input_fn.checkpoint=None;input_fn.queued_command=None;input_fn.save_after_draft=False;input_fn.save_configuration=None
 
 
 def _wizard(config,path,kind,input_fn=input):
@@ -414,16 +463,21 @@ def _wizard(config,path,kind,input_fn=input):
     history=EditHistory()
     from configbackup_lib.configuration.config_editor import fingerprint
     original_hash=fingerprint(path)
+    pending_action=None;last_saved='No save this session';validation_status='Not checked this session';validated_snapshot=None;dependency_rows=[]
     from configbackup_lib.ui.navigation import grouped_choice, Navigate
     menu_area=[None]
     before_action=copy.deepcopy(config)
     checkpoint_value=copy.deepcopy(config)
     def checkpoint():
-        nonlocal checkpoint_value
+        nonlocal checkpoint_value,validation_status
         history.record(checkpoint_value,config);checkpoint_value=copy.deepcopy(config)
-        if getattr(input_fn,'console_ui',False):input_fn.dirty=config!=original
+        if validated_snapshot is not None and config!=validated_snapshot:validation_status='Changed since last validation'
+        if getattr(input_fn,'console_ui',False):
+            from configbackup_lib.ui.navigation import changed_count
+            input_fn.dirty=config!=original
+            input_fn.overview_status=f'{changed_count(original,config)} unsaved changes; saved: {last_saved}; validation: {validation_status}'
     def command(action,mode='menu',draft=False):
-        nonlocal original_hash,before_action,checkpoint_value
+        nonlocal original_hash,before_action,checkpoint_value,last_saved,validation_status,validated_snapshot
         checkpoint()
         if action=='Save':
             if draft:
@@ -435,32 +489,58 @@ def _wizard(config,path,kind,input_fn=input):
             try:
                 backup=save(config,path,kind,expected_hash=original_hash)
             except (ValueError,TypeError,KeyError,OSError,ConfigError) as exc:
-                print('Save failed; edits retained:',exc);return
+                validation_status='Save validation/write failed';validated_snapshot=copy.deepcopy(config);print('Save failed; edits retained:',exc);return False
             original.clear();original.update(copy.deepcopy(config));original_hash=fingerprint(path)
             before_action=copy.deepcopy(config)
             if getattr(input_fn,'console_ui',False):input_fn.dirty=False
-            print('Saved '+str(path)+('; backup: '+str(backup) if backup else '')+'. Continue editing.')
+            last_saved=dt.datetime.now().astimezone().isoformat(timespec='seconds');validation_status='Valid';validated_snapshot=copy.deepcopy(config)
+            print('Saved '+str(path)+('; backup: '+str(backup) if backup else '')+'. Continue editing.');return True
         elif action=='Validate':
-            try:validate(config,kind,path);print('Configuration is valid. Unfinished items are not included.')
-            except (ValueError,TypeError,KeyError,OSError,ConfigError) as exc:print('Validation failed; edits retained:',exc)
+            try:
+                validate(config,kind,path);validation_status='Valid';validated_snapshot=copy.deepcopy(config);print('Configuration is valid. Unfinished items are not included.')
+            except (ValueError,TypeError,KeyError,OSError,ConfigError) as exc:
+                validation_status='Invalid';validated_snapshot=copy.deepcopy(config);print('Validation failed; edits retained:',exc)
+                from configbackup_lib.ui.navigation import validation_targets
+                targets=validation_targets(config,exc)
+                selected=choice('Validation issues',list(targets)+['Back'],input_fn)
+                if selected in targets:
+                    if (mode in ('text','multi') or draft or getattr(input_fn,'field_active',False)) and not boolean('Leave unfinished input to open the selected location?',False,input_fn):return
+                    if getattr(input_fn,'console_ui',False):input_fn.save_after_draft=False;input_fn.queued_command=None
+                    raise Navigate('open',targets[selected])
+        elif action=='Help':
+            print('Context: '+getattr(input_fn,'title','Configuration'))
+            print(getattr(input_fn,'field_context',''))
+            print(getattr(input_fn,'operation_context',''))
+            print('Ctrl+S/F2 saves accepted fields. F3 validates; F4 reviews changes. F5/F6 undo/redo. F8 searches all areas and configured setting paths. Esc cancels input. F10 exits with unsaved-input protection.')
+            print('Tests explicitly identify current edits versus saved configuration. External operations are not undone by configuration undo.')
+        elif action=='Command palette':
+            from configbackup_lib.ui.navigation import palette_entries
+            entries=palette_entries(config,choices)
+            selected=choice('Find command or setting',list(entries)+['Back'],input_fn)
+            if selected in (None,'Back'):return
+            if (mode in ('text','multi') or draft or getattr(input_fn,'field_active',False)) and not boolean('Leave unfinished input to open the selected location?',False,input_fn):return
+            if getattr(input_fn,'console_ui',False):input_fn.save_after_draft=False;input_fn.queued_command=None
+            raise Navigate('open',entries[selected])
         elif action=='Preview changes':
             from configbackup_lib.configuration.config_editor import semantic_diff
             print(semantic_diff(original,config))
         elif action in ('Undo last action','Redo last action'):
-            if (mode in ('text','multi') or draft) and not boolean('Discard the current unfinished field/item and return to the main menu?',False,input_fn):return
+            if (mode in ('text','multi') or draft or getattr(input_fn,'field_active',False)) and not boolean('Discard the current unfinished field/item and return to the main menu?',False,input_fn):return
+            if getattr(input_fn,'console_ui',False):input_fn.save_after_draft=False;input_fn.queued_command=None
             done=history.undo(config) if action=='Undo last action' else history.redo(config)
             checkpoint_value=copy.deepcopy(config)
             print(('Undone.' if action=='Undo last action' else 'Redone.') if done else 'No history available.')
             raise Navigate('home')
         elif action=='Quit without saving':
-            if (config!=original or mode in ('text','multi') or draft) and not boolean('Discard unsaved configuration changes and unfinished input?',False,input_fn):return
+            if (config!=original or mode in ('text','multi') or draft or getattr(input_fn,'field_active',False)) and not boolean('Discard unsaved configuration changes and unfinished input?',False,input_fn):return
             raise Navigate('exit')
-    if getattr(input_fn,'console_ui',False):input_fn.command_handler=command;input_fn.checkpoint=checkpoint
+    if getattr(input_fn,'console_ui',False):input_fn.command_handler=command;input_fn.checkpoint=checkpoint;input_fn.save_configuration=lambda:command('Save')
     if getattr(input_fn,'console_ui',False):
         from configbackup_lib.ui.config_browser import summary
         print(summary(config))
         from configbackup_lib.ui.config_dependencies import inspect as inspect_dependencies
-        for row in inspect_dependencies():
+        dependency_rows=inspect_dependencies()
+        for row in dependency_rows:
             if row['status']!='ready':print('Dependency attention: '+row['name']+' — '+row['detail']+'. Open Python dependencies to repair.')
     while True:
         choices=['Tasks','Monitoring sources','Alert rules','Notification channels','Show configuration'] if kind=='backup' else ['Sources','Report/analysis settings','Show configuration'] if kind=='schedule' else ['Monitoring sources','Alert rules','Notification channels','Monitoring settings','Show configuration']
@@ -469,21 +549,40 @@ def _wizard(config,path,kind,input_fn=input):
             choices += ['Generate startup launcher','Generate database access scripts','Database connection tests','Shared connections','Check setup','Recovery files and export','Autodetect and guided setup','Verify and rehearse setup recovery','Discover files from scheduled jobs','Recovery and review workflows','HTML review reports','Optional collectors and discovery','Collection profiles','Effective preview','Saved collection profiles','Performance recording and reports','Recovery readiness targets','Sensitive collection','PowerShell execution policy','Launcher manager','Recovery status and reset','Windows readiness','Task defaults','Retention settings','Git settings','Backup settings','Deletion settings','Monitoring settings']
         choices += ['Current configuration','Python dependencies','Configuration summary']
         checkpoint()
-        try:action=grouped_choice(choices,menu_area,input_fn)
+        try:
+            if pending_action is not None:action=pending_action;pending_action=None
+            else:action=grouped_choice(choices,menu_area,input_fn)
         except Navigate as navigation:
             menu_area[0]=None
+            if navigation.destination=='open':pending_action=navigation.payload
             if navigation.destination=='exit':return False
             continue
         before_action=copy.deepcopy(config)
+        if getattr(input_fn,'console_ui',False):input_fn.field_context='';input_fn.field_error=''
+        target_path=None;edit_target=False
+        if isinstance(action,tuple):
+            if action[0] in ('setting','validation'):target_path=action[1];edit_target=action[0]=='validation';action='Current configuration'
+            else:action=action[1]
         try:
+            from configbackup_lib.ui.navigation import operation_boundary
+            boundary=operation_boundary(action)
+            if boundary:print(boundary)
+            if getattr(input_fn,'console_ui',False):input_fn.operation_context=boundary
             monitor=(config.get('monitoring') or {}) if kind=='backup' else config.get('monitoring',config)
-            if kind=='backup' and action in ('Monitoring sources','Alert rules','Notification channels'):config['monitoring']=monitor
-            if action in ('Save','Validate','Preview changes','Undo last action','Redo last action','Quit without saving'):
+            def attach_monitor(key,value):
+                monitor[key]=value
+                if kind=='backup':config['monitoring']=monitor
+            if action in ('Save','Validate','Preview changes','Undo last action','Redo last action','Help','Command palette','Quit without saving'):
                 if getattr(input_fn,'console_ui',False):input_fn.execute_command(action,'menu')
                 else:command(action)
             elif action=='Configuration summary':
                 from configbackup_lib.ui.config_browser import summary
+                from configbackup_lib.ui.navigation import changed_count
+                tasks=config.get('tasks',[])
                 print(summary(config))
+                print(f'Tasks: {len(tasks)}; enabled: {sum(t.get("enabled",True) is True for t in tasks)}; disabled: {sum(t.get("enabled",True) is False for t in tasks)}')
+                print(f'Unsaved changes: {changed_count(original,config)}; last saved: {last_saved}; validation: {validation_status}')
+                print('Dependency attention: '+(', '.join(r['name'] for r in dependency_rows if r['status']!='ready') or 'none detected'))
             elif action in ('Task defaults','Retention settings','Git settings','Backup settings','Deletion settings','Monitoring settings'):
                 key={'Task defaults':'defaults','Retention settings':'retention_policies','Git settings':'git','Backup settings':'backup','Deletion settings':'deletion','Monitoring settings':'monitoring'}[action]
                 from configbackup_lib.ui.config_browser import browse
@@ -502,10 +601,13 @@ def _wizard(config,path,kind,input_fn=input):
                 policy_wizard(config,input_fn)
             elif action=='Current configuration':
                 from configbackup_lib.ui.config_browser import browse
-                browse(config,input_fn)
+                browse(config,input_fn,start=target_path,edit_start=edit_target)
             elif action=='Python dependencies':
                 from configbackup_lib.ui.config_dependencies import wizard as dependency_wizard
-                dependency_wizard(input_fn)
+                try:dependency_wizard(input_fn)
+                finally:
+                    from configbackup_lib.ui.config_dependencies import inspect as inspect_dependencies
+                    dependency_rows=inspect_dependencies()
             elif action=='Sensitive collection':
                 from configbackup_lib.git.sensitive_data import wizard as sensitive_wizard
                 sensitive_wizard(config,input_fn)
@@ -548,27 +650,28 @@ def _wizard(config,path,kind,input_fn=input):
             elif action=='Preview changes':
                 from configbackup_lib.configuration.config_editor import semantic_diff
                 print(semantic_diff(original,config))
-            elif action=='Registry selections':manage(config.setdefault('registry',[]),'Registry selections',new_registry,input_fn)
+            elif action=='Registry selections':manage(config.get('registry',[]),'Registry selections',new_registry,input_fn,attach=lambda value:config.__setitem__('registry',value))
             elif action=='Generate startup launcher':launcher_wizard(path,input_fn,(config.get('options') or {}).get('powershell_execution_policy','inherit'))
             elif action=='Generate database access scripts':access_wizard(input_fn)
             elif action=='Database connection tests':diagnostics_wizard(config,input_fn)
             elif action=='Shared connections':shared_connections_wizard(config,path,input_fn)
             elif action=='Check setup':
                 from configbackup_lib.engine.setup_checks import run
-                print(json.dumps(run(config,path),indent=2))
+                if test_mode(input_fn):print(json.dumps(run(config,path),indent=2))
             elif action=='Default registry selections':config['include_defaults']=edit_boolean('Include the built-in selected settings',config.get('include_defaults',True),input_fn)
             elif action=='Tasks':
-                manage(config.setdefault('tasks',[]),'Backup tasks',lambda inp:template_tasks(choice('Task template',['Directory','SQL Server','PostgreSQL','System'],inp),inp),input_fn,config=config)
-            elif action=='Monitoring sources':manage(monitor.setdefault('sources',[]),'Telemetry sources',new_source,input_fn)
-            elif action=='Sources':manage(config.setdefault('sources',[]),'Schedule sources',lambda inp:new_source(inp,True),input_fn)
-            elif action=='Alert rules':manage(monitor.setdefault('rules',[]),'Alert rules',new_rule,input_fn)
-            elif action=='Notification channels':manage(monitor.setdefault('notifications',{}).setdefault('channels',[]),'Notification channels',new_channel,input_fn)
+                manage(config.get('tasks',[]),'Backup tasks',lambda inp:template_tasks(choice('Task template',['Directory','SQL Server','PostgreSQL','System'],inp),inp),input_fn,config=config,attach=lambda value:config.__setitem__('tasks',value),path=path)
+            elif action=='Monitoring sources':manage(monitor.get('sources',[]),'Telemetry sources',new_source,input_fn,attach=lambda value:attach_monitor('sources',value))
+            elif action=='Sources':manage(config.get('sources',[]),'Schedule sources',lambda inp:new_source(inp,True),input_fn,attach=lambda value:config.__setitem__('sources',value))
+            elif action=='Alert rules':manage(monitor.get('rules',[]),'Alert rules',new_rule,input_fn,attach=lambda value:attach_monitor('rules',value))
+            elif action=='Notification channels':manage(monitor.get('notifications',{}).get('channels',[]),'Notification channels',new_channel,input_fn,attach=lambda value:attach_monitor('notifications',{**monitor.get('notifications',{}),'channels':value}))
             elif action=='Report/analysis settings':
                 group=choice('Settings',['reports','analysis'],input_fn)
                 if group:config[group]=json_value(group,config.get(group,{}),input_fn)
             elif action=='Show configuration':print(yaml.safe_dump(redact_for_display(config),sort_keys=False))
         except Navigate as navigation:
             menu_area[0]=None
+            if navigation.destination=='open':pending_action=navigation.payload
             if navigation.destination=='exit':return False
         except EditCancelled:
             if getattr(input_fn,'console_ui',False):input_fn.queued_command=None;input_fn.save_after_draft=False

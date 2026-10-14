@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.6.0
+
+- Keep task fields editable when malformed inheritance settings prevent the context preview from resolving.
+
+- Preserve pre-existing seal destinations on copy failure and release launcher locks when backup creation fails.
+- Omit invalid observed durations with warnings and reject non-finite or negative schedule overrides.
+
+- Cancel saves from empty selector searches and repair malformed mapping/list values with typed input.
+- Bind configuration restore to validated bytes and reject files changed during confirmation.
+- Detect quoted JSON/YAML credentials in the Git secret-scan gate, including UTF-16 and archives.
+- Package tracked source files only and derive release versions from the application.
+
+- Give duplicated tasks independent state identities and separate connection names from menu commands.
+- Protect unfinished selector input on exit/search/undo and resume fields when a command confirmation is cancelled.
+- Unify guided field adapters, validate report/PerfMon timezones inline, and avoid inserting a report section on cancellation.
+- Link validation failures to settings, show inherited task/profile/connection values before reset, and refresh dependency summaries after repair.
+
+- Preserve configured selector values, unify console undo, cancel abandoned deferred saves and offer every engine task phase.
+- Keep read-only settings navigation free of empty-section changes.
+- Add context help, cross-menu command/setting search, inline field errors, inheritance/reset context and session overview status.
+- Use item-first task/connection menus and explicit current-edit versus Save-and-test checks.
+- Stage recorder forms and share validated field handling with older guided inputs.
+
 ## 1.5.0
 
 - Group configuration workflows by purpose, with fixed session commands and clearer profile labels.

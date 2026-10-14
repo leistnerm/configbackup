@@ -13,15 +13,16 @@ references; existing inline secrets remain preserved without being displayed.
 The menus are grouped by purpose; see the [console menu and shortcut guide](console-configurator.md).
 **Ctrl+S/F2 Save**, **F3 Validate** and **F4 Changes** work in submenus and fields.
 Save retains your location. **F5/F6 Undo/Redo** return to the main menu and ask
-before discarding unfinished input. Earlier accepted edits survive Escape.
+before discarding unfinished input. The browser’s Undo uses this same session history.
+F1 shows context help and F8 searches across commands and configured setting paths. Earlier accepted edits survive Escape.
 History is bounded to 100 accepted-change snapshots and stays in memory; it does
 not reverse installations or filesystem operations. The screen marks unsaved changes.
 Save validates, detects external edits and keeps a backup. Deferred saves for a
 new item happen only after completion, or explicitly save completed changes alone.
 
-**Tasks → Rename with references** retains the prior state identity and updates
+**Tasks → select an item → Rename with references** retains the prior state identity and updates
 dependencies and exact task-scoped sensitive Git approvals after confirmation.
-**Shared connections → Rename connection** updates task references. Removal of a
+**Shared connections → select a connection → Rename connection** updates task references. Removal of a
 referenced task/connection is blocked with the dependent names. Custom scripts,
 paths and external scheduler arguments are not rewritten automatically.
 

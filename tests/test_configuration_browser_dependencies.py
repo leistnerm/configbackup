@@ -14,7 +14,7 @@ class BrowserDependencyTests(unittest.TestCase):
     def test_browser_edits_existing_nested_item_and_preserves_unknown_fields(self):
         config={'tasks':[{'name':'existing','enabled':True,'source':'old','extension_setting':{'keep':7}}],'reporting':{'timezone':'UTC'}}
         choices=iter(['tasks: (1 items)','0: existing (4 settings)','source: old','Back','Back','reporting: (1 settings)','timezone: UTC','America/New_York','Back','Back'])
-        def choose(prompt,values,*args):
+        def choose(prompt,values,*args,**kwargs):
             answer=next(choices)
             # Counts include an optional leading space for unnamed containers.
             match=next((v for v in values if v.strip()==answer),None)
@@ -26,7 +26,7 @@ class BrowserDependencyTests(unittest.TestCase):
     def test_sensitive_container_and_argument_values_are_never_displayed(self):
         config={'secret_settings':{'name':'PRIVATE-SENTINEL'},'arguments':['--password','PRIVATE-SENTINEL']}
         before=copy.deepcopy(config);output=io.StringIO()
-        def choose(prompt,values,*args):
+        def choose(prompt,values,*args,**kwargs):
             self.assertNotIn('PRIVATE-SENTINEL',str(values))
             if prompt=='Current configuration':return values[0] if not hasattr(choose,'seen') else 'Back'
             choose.seen=True;return 'Back'

@@ -1,10 +1,11 @@
 Windows test kit coverage
 
-The launcher includes 339 selected application fixtures and 42 GPO fixtures.
+The launcher includes 387 selected application fixtures and 42 GPO fixtures.
 Additional tests cover launcher, prerequisite and component comparison behavior.
 Synthetic fixtures do not verify native Windows behavior. See WINDOWS-TESTING.md
 for the unverified platform matrix and LAUNCHER-GUIDE.txt for usage.
 
-The 1.5.0 kit includes 26 console/navigation checks. prompt_toolkit 3.x is
-required for these; prerequisite setup can install it after explicit approval.
-Keyboard fixtures use a synthetic input stream, not the actual Windows console.
+The 1.6.0 kit includes keyboard matrices across field types, configuration restore
+and quoted credential fixtures. prompt_toolkit 3.x is required; prerequisite
+setup can install it after explicit approval. Keyboard fixtures use a synthetic
+input stream, not the actual Windows console.

@@ -14,7 +14,7 @@ RULES = {
     'private-key': rb'-----BEGIN (?:RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----',
     'github-token': rb'\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})',
     'aws-access-key': rb'\bAKIA[A-Z0-9]{16}\b',
-    'credential-assignment': rb'''(?i)\b(?:password|passwd|pwd|client_secret|api_key|access_token)\s*[=:]\s*["']?([^\s;,'"<>]{4,})''',
+    'credential-assignment': rb'''(?i)\b(?:password|passwd|pwd|client_secret|api_key|access_token)["']?\s*[=:]\s*["']?([^\s;,'"<>]{4,})''',
     'xml-credential': rb'(?i)<(?:password|passwd|client_secret|api_key)>[^<\s]{4,}</',
     'credential-uri': rb'(?i)\b[a-z][a-z0-9+.-]*://[^\s/:@]+:([^\s/@]+)@',
 }

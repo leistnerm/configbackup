@@ -2,28 +2,44 @@
 """Build repeatable application, GPO harness and workstation kit archives."""
 from __future__ import annotations
 import argparse
+import ast
+import subprocess
 import hashlib
 import json
 from pathlib import Path
 import re
 import stat
 import zipfile
-VERSION = '1.5.0'
 GPO_VERSION = '1.0.0'
 ROOT = Path(__file__).resolve().parents[1]
+
+def application_version(root):
+    tree=ast.parse((root/'configbackup_lib/engine/configbackup.py').read_text(encoding='utf-8'))
+    values=[node.value.value for node in tree.body if isinstance(node,ast.Assign)
+            and any(isinstance(target,ast.Name) and target.id=='APP_VERSION' for target in node.targets)
+            and isinstance(node.value,ast.Constant) and isinstance(node.value.value,str)]
+    if len(values)!=1 or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+',values[0]):
+        raise ValueError('Expected one semantic APP_VERSION in the engine')
+    return values[0]
+
+VERSION=application_version(ROOT)
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 def files(root, excluded=()):
     result = {}
-    for path in sorted(root.rglob('*')):
-        rel = path.relative_to(root)
+    # The index is the release source manifest. Never include untracked local data.
+    result_run=subprocess.run(['git','-C',str(root),'ls-files','--cached','-z','--','.'],check=True,capture_output=True)
+    for name in sorted(set(result_run.stdout.decode('utf-8').split('\0'))-{''}):
+        rel=Path(name);path=root/rel
+        if rel.is_absolute() or '..' in rel.parts:raise ValueError('Unsafe tracked release path')
         if any(part in {'.git', '__pycache__', '.venv', 'venv', 'dist', 'private'} for part in rel.parts) or rel.parts[0] in excluded:
             continue
         if path.is_symlink():
             raise ValueError(f'Release source contains a symbolic link: {rel}')
-        if path.is_file() and path.name != '.DS_Store' and path.suffix not in {'.pyc', '.pyo'}:
+        if not path.is_file():raise ValueError(f'Tracked release file is missing or not regular: {rel}')
+        if path.name != '.DS_Store' and path.suffix not in {'.pyc', '.pyo'}:
             result[rel.as_posix()] = path.read_bytes()
     return result
 

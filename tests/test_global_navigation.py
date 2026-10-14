@@ -94,7 +94,7 @@ class GlobalNavigationTests(unittest.TestCase):
         config={'sources':[{'type':'sql','host':'host','path':'/capture','timezone':'UTC'}]}
         steps=self.browser()+[('Current configuration','sources\r'),('Current configuration/sources','\r'),('Current configuration/sources/0','host\r'),('host','\x01\x0b\x13'),('Current configuration/sources/0','\x1b[21~'),('Discard unsaved configuration changes and unfinished input?','yes\r'),('Session complete','\r')]
         result,ui=self.run_editor(config,steps,lambda p,b:self.assertEqual(p.read_bytes(),b))
-        self.assertEqual(config['sources'][0]['host'],'');self.assertIn('Save failed; edits retained',ui.log_text)
+        self.assertEqual(config['sources'][0]['host'],'');self.assertIn('Save failed; edits retained',ui.log_text);self.assertEqual(ui.overview_status.split('validation: ')[-1],'Save validation/write failed')
 
     def test_save_io_failure_keeps_memory_and_original_file(self):
         config={'sources':[], 'custom':{'label':'old'}}

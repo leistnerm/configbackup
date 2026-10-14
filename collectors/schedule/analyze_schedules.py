@@ -109,8 +109,16 @@ def parse_dt(value: Any) -> dt.datetime | None:
         return None
 
 
+def finite_duration(value):
+    if isinstance(value,bool):return None
+    try:
+        number=float(value)
+        return number if math.isfinite(number) and number>=0 else None
+    except (ValueError,TypeError,OverflowError):return None
+
+
 def median_p95(durations: list[float]) -> tuple[float | None, float | None]:
-    items = sorted(x for x in durations if x >= 0)
+    items = sorted(x for x in durations if math.isfinite(x) and x >= 0)
     if not items:
         return None, None
     return round(statistics.median(items), 2), round(items[math.ceil(0.95 * len(items)) - 1], 2)
@@ -469,8 +477,8 @@ def load_postgres(path: Path, start: dt.date, days: int, server: str) -> tuple[l
             selected=[e for e in exceptions if e.get('jexscid')==spec.get('jscid')]
             events,cadence,warning=expand_pgagent(spec,selected,start,days)
             key=f"pgagent:{server}:{db}:{job.get('jobid',spec.get('jscjobid'))}"
-            durations=[float(r['duration_seconds'])/60 for r in read_csv(path/'telemetry'/db/'pgagent-runs.csv')
-                       if r.get('jlgjobid')==spec.get('jscjobid') and r.get('duration_seconds') and execution_success('pgagent',r.get('jlgstatus'))]
+            durations=[duration/60 for r in read_csv(path/'telemetry'/db/'pgagent-runs.csv')
+                       if r.get('jlgjobid')==spec.get('jscjobid') and (duration:=finite_duration(r.get('duration_seconds'))) is not None and execution_success('pgagent',r.get('jlgstatus'))]
             jobs.append(Job(key,'pgagent',job.get('jobname',key),cadence,spec.get('jscname',''),lambda s,d,e=events:e,durations,warning))
             if warning:warnings.append(key+': '+warning)
     return jobs,warnings
@@ -643,7 +651,8 @@ def observation_time(value, zone):
     except ValueError:return None
 
 
-def load_observations(path,job):
+def load_observations(path,job,warnings=None):
+    warnings=[] if warnings is None else warnings
     rows=[]
     if job.source=='windows':
         for r in (read_csv(path/'telemetry'/'scheduled-task-runs.csv') or read_csv(path/'scheduling'/'scheduled-task-runs.csv')):
@@ -669,7 +678,10 @@ def load_observations(path,job):
             else:
                 for r in read_csv(path/'telemetry'/db.name/'pgagent-runs.csv'):
                     if job.key.endswith(':'+r.get('jlgjobid','')) and r.get('duration_seconds'):
-                        rows.append({'start':r.get('jlgstart'),'minutes':float(r['duration_seconds'])/60,'status':r.get('jlgstatus','')})
+                        duration=finite_duration(r['duration_seconds'])
+                        if duration is None:
+                            warnings.append(job.key+': invalid pgAgent duration omitted');continue
+                        rows.append({'start':r.get('jlgstart'),'minutes':duration/60,'status':r.get('jlgstatus','')})
     # Optional instrumented execution facts. No attribution from host counters.
     for r in read_csv(path/'telemetry'/'executions.csv'):
         if r.get('job_id')==job.key:rows.append(r)
@@ -677,7 +689,13 @@ def load_observations(path,job):
     for r in rows:
         begin=observation_time(r.get('start'),job.timezone)
         end=observation_time(r.get('end'),job.timezone)
-        if begin and 'minutes' in r:end=begin+dt.timedelta(minutes=float(r['minutes']))
+        if begin and 'minutes' in r:
+            duration=finite_duration(r['minutes'])
+            if duration is None:
+                warnings.append(job.key+': invalid observed duration omitted');continue
+            try:end=begin+dt.timedelta(minutes=duration)
+            except OverflowError:
+                warnings.append(job.key+': observed duration outside supported date range omitted');continue
         if begin and not end and str(r.get('status','')).casefold() in ('running','r','4'):
             result.append({**r,'start':begin.isoformat(),'end':'','job_id':job.key,'host':job.host,'duration_minutes':None})
         if begin and end and end>=begin:
@@ -837,7 +855,7 @@ def _report(args: argparse.Namespace) -> dict[str,int]:
                     if kind=='system':job.key=job.key.replace(':',':'+host+':',1)
                     # Legacy system IDs remain available when using the old CLI.
                     if kind=='system' and args.system and host=='system':job.key=job.key.replace(':system:',':',1)
-                    job.observed=load_observations(certified,job)
+                    job.observed=load_observations(certified,job,warnings)
                     job.heartbeats=[r for r in read_csv(certified/'telemetry'/'heartbeats.csv') if r.get('job_id')==job.key]
                     if job.observed:
                         job.durations=[float(r['duration_minutes']) for r in job.observed if r.get('duration_minutes') is not None and execution_success(job.source,r.get('status'))]
@@ -847,7 +865,12 @@ def _report(args: argparse.Namespace) -> dict[str,int]:
     exclude_load=settings.get('exclude_from_load') or []
     watchdogs=settings.get('watchdogs') or []
     duration_overrides=settings.get('duration_overrides_minutes') or {}
+    for value in duration_overrides.values():
+        if finite_duration(value) is None:raise ValueError('Duration overrides must be finite and nonnegative')
     for job in all_jobs:
+        clean=[value for value in job.durations if finite_duration(value) is not None]
+        if len(clean)!=len(job.durations):warnings.append(job.key+': invalid observed durations omitted')
+        job.durations=clean
         for pattern,value in duration_overrides.items():
             if match_id(job.key,[pattern]):job.override_duration=float(value)
     columns=['host','timezone','local_start','start','end_estimated','duration_minutes','duration_basis','job_id','source','job','schedule','cadence','watchdog']

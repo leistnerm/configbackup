@@ -1,6 +1,6 @@
-Current release: **1.5.0**. See [release notes](docs/release-1.5.0.md) and [validation](VALIDATION.md).
+Current release: **1.6.0**. See [release notes](docs/release-1.6.0.md) and [validation](VALIDATION.md).
 
-# ConfigBackup 1.5.0
+# ConfigBackup 1.6.0
 
 Configuration backup with independent database/section failure preservation, deterministic comparison, recovery checks, optional monitoring and offline HTML reports.
 
@@ -364,11 +364,11 @@ Retention runs automatically only when required tasks complete successfully, and
 
 ## Release packages
 
-Download ConfigBackup 1.5.0:
+Download ConfigBackup 1.6.0:
 
-- [Application ZIP](https://github.com/leistnerm/configbackup/releases/download/v1.5.0/configbackup-1.5.0.zip) · [SHA-256](https://github.com/leistnerm/configbackup/releases/download/v1.5.0/configbackup-1.5.0.zip.sha256)
-- [Windows test kit ZIP](https://github.com/leistnerm/configbackup/releases/download/v1.5.0/configbackup-workstation-kit-1.5.0.zip) · [SHA-256](https://github.com/leistnerm/configbackup/releases/download/v1.5.0/configbackup-workstation-kit-1.5.0.zip.sha256)
-- [Standalone GPO test ZIP](https://github.com/leistnerm/configbackup/releases/download/v1.5.0/configbackup-gpo-test-1.0.0.zip) · [SHA-256](https://github.com/leistnerm/configbackup/releases/download/v1.5.0/configbackup-gpo-test-1.0.0.zip.sha256)
+- [Application ZIP](https://github.com/leistnerm/configbackup/releases/download/v1.6.0/configbackup-1.6.0.zip) · [SHA-256](https://github.com/leistnerm/configbackup/releases/download/v1.6.0/configbackup-1.6.0.zip.sha256)
+- [Windows test kit ZIP](https://github.com/leistnerm/configbackup/releases/download/v1.6.0/configbackup-workstation-kit-1.6.0.zip) · [SHA-256](https://github.com/leistnerm/configbackup/releases/download/v1.6.0/configbackup-workstation-kit-1.6.0.zip.sha256)
+- [Standalone GPO test ZIP](https://github.com/leistnerm/configbackup/releases/download/v1.6.0/configbackup-gpo-test-1.0.0.zip) · [SHA-256](https://github.com/leistnerm/configbackup/releases/download/v1.6.0/configbackup-gpo-test-1.0.0.zip.sha256)
 
 See [GitHub Releases](https://github.com/leistnerm/configbackup/releases/latest) for the latest version. Kit source is in `windows-test-kit/`; the independent GPO harness is in `tools/gpo-test/`. See [building release packages](docs/building-releases.md) to reproduce the archives.
 

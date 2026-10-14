@@ -63,7 +63,7 @@ def duplicate_group(items,index,name):
     if not old:raise ValueError('Task group duplication requires a named task')
     existing={item.get('name') for item in items}
     if name in existing:raise ValueError('Task name already exists: '+name)
-    clone=copy.deepcopy(original);clone['name']=name
+    clone=copy.deepcopy(original);clone['name']=name;clone.pop('state_id',None)
     if original.get('type')!='execute':
         if original.get('type')=='command':clone['output']=name+Path(str(original.get('output',''))).suffix
         else:clone['destination']=name
@@ -80,7 +80,7 @@ def duplicate_group(items,index,name):
     consumers=[item for item in items if old in ([item.get('depends_on')] if isinstance(item.get('depends_on'),str) else item.get('depends_on',[])) and item.get('type')=='directory' and item.get('source')==old_output]
     group=[clone]
     for n,item in enumerate(consumers):
-        child=rewrite(copy.deepcopy(item));child['name']=name+'-archive'+(str(n+1) if n else '')
+        child=rewrite(copy.deepcopy(item));child.pop('state_id',None);child['name']=name+'-archive'+(str(n+1) if n else '')
         child['depends_on']=[name if d==old else d for d in ([item['depends_on']] if isinstance(item['depends_on'],str) else item['depends_on'])]
         child['destination']=name if len(consumers)==1 else name+'/'+str(n+1)
         if child['name'] in existing:raise ValueError('Task name already exists: '+child['name'])

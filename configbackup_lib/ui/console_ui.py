@@ -40,6 +40,7 @@ class ConsoleUI:
         self.mode='busy';self.title='Opening configuration';self.items=[];self.selected=set()
         self.index=0;self.search='';self.history={};self.pending=None;self.loop=None
         self.command_handler=None;self.checkpoint=None;self.command_active=False;self.queued_command=None;self.draft_active=False;self.field_active=False;self.save_after_draft=False
+        self.field_error='';self.field_context='';self.overview_status='';self.operation_context=''
         self.log_text='';self.confirming=False;self.status='Ready';self.error=None;self.closed=False;self.dirty=False
         self.text=TextArea(multiline=False, wrap_lines=False, style='class:input')
         self.log=TextArea(text='Select a configuration area to begin.\nChanges are written only when you use Save.',read_only=True,scrollbar=True,wrap_lines=True,style='class:log')
@@ -52,12 +53,14 @@ class ConsoleUI:
             Window(FormattedTextControl(lambda:'Filter: '+self.search if self.mode in ('menu','multi') else ''),height=1,style='class:muted'),
             ConditionalContainer(self.menu,active),
             ConditionalContainer(self.text,field),
+            ConditionalContainer(Window(FormattedTextControl(lambda:clean(self.field_error)),height=2,wrap_lines=True,style='class:error'),Condition(lambda:bool(self.field_error))),
             ConditionalContainer(Window(FormattedTextControl('Working… results appear on the right.')),Condition(lambda:self.mode=='busy')),
         ])
         self.root=HSplit([
             Window(FormattedTextControl([('class:brand','  CONFIGBACKUP  '),('class:header','Configuration studio')]),height=1,style='class:header'),
             Window(FormattedTextControl(lambda:'  '+clean(str(self.path.absolute()))+('  [UNSAVED]' if self.dirty else '')),height=1,style='class:muted'),
-            Window(FormattedTextControl(lambda:'  Ctrl+S/F2 Save  F3 Validate  F4 Changes  F5 Undo  F6 Redo  F10 Exit' if self.command_handler and self.mode!='busy' and not self.command_active else '  Commands unavailable during operations' if self.command_handler else '  Configuration  /  '+clean(self.title)),height=1,style='class:bar'),
+            Window(FormattedTextControl(lambda:'  '+clean(self.overview_status)),height=1,style='class:muted'),
+            Window(FormattedTextControl(lambda:'  ^S/F2 Save F3 Check F4 Diff F5 Undo F6 Redo F1 Help F8 Find F10 Exit' if self.command_handler and self.mode!='busy' and not self.command_active else '  Commands unavailable during operations' if self.command_handler else '  Configuration  /  '+clean(self.title)),height=1,style='class:bar'),
             VSplit([Frame(left,title='Configuration',width=Dimension(weight=1)),Frame(self.log,title='Details & results',width=Dimension(weight=1))],padding=1),
             Window(FormattedTextControl(self.footer),height=2,style='class:footer',wrap_lines=True),
         ])
@@ -77,7 +80,9 @@ class ConsoleUI:
         @kb.add('escape',filter=Condition(lambda:self.mode in ('menu','multi') and not self.in_log))
         def back(event):
             if self.search:self.search='';self.index=0
-            else:self.resolve(None if self.mode=='menu' else self.original_selection)
+            else:
+                if not self.command_active:self.queued_command=None;self.save_after_draft=False
+                self.resolve(None if self.mode=='menu' else self.original_selection)
         @kb.add('escape',filter=field)
         def cancel_text(event):self.resolve(None)
         @kb.add('backspace',filter=active & Condition(lambda:not self.in_log))
@@ -97,9 +102,9 @@ class ConsoleUI:
                     self.confirming=True;self.status='Press Ctrl+C again to discard unsaved edits and exit, or continue editing.'
                 else:self.resolve(KeyboardInterrupt())
             else:self.status='An operation is running. Wait for it to finish before exiting.'
-        for key,action in [('c-s','Save'),('f2','Save'),('f3','Validate'),('f4','Preview changes'),('f5','Undo last action'),('f6','Redo last action'),('f10','Quit without saving')]:
+        for key,action in [('f1','Help'),('f8','Command palette'),('c-s','Save'),('f2','Save'),('f3','Validate'),('f4','Preview changes'),('f5','Undo last action'),('f6','Redo last action'),('f10','Quit without saving')]:
             kb.add(key, eager=True)(lambda e,a=action:self.global_command(a))
-        style=Style.from_dict({'header':'bg:#172b4d #ffffff','brand':'bg:#087e8b #ffffff bold','bar':'bg:#254566 #ffffff','subtitle':'#63d4db bold','muted':'#a6b4c7','selected':'bg:#087e8b #ffffff bold','log':'#cbd5e1','input':'bg:#24364a #ffffff','footer':'bg:#172b4d #cbd5e1','frame.border':'#42617d'})
+        style=Style.from_dict({'error':'#ff8080 bold','header':'bg:#172b4d #ffffff','brand':'bg:#087e8b #ffffff bold','bar':'bg:#254566 #ffffff','subtitle':'#63d4db bold','muted':'#a6b4c7','selected':'bg:#087e8b #ffffff bold','log':'#cbd5e1','input':'bg:#24364a #ffffff','footer':'bg:#172b4d #cbd5e1','frame.border':'#42617d'})
         self.app=Application(layout=Layout(self.root,focused_element=self.menu),key_bindings=kb,style=style,full_screen=True,input=input,output=output)
 
     @property
@@ -125,7 +130,7 @@ class ConsoleUI:
         self.app.invalidate()
     def present(self, mode, prompt, values, default, future):
         self.pending=future;self.mode=mode;self.title=prompt;self.items=list(values);self.search='';self.confirming=False
-        self.index=min(self.history.get((prompt,tuple(values)),0),max(0,len(values)-1))
+        self.index=values.index(default) if mode=='menu' and default in values else min(self.history.get((prompt,tuple(values)),0),max(0,len(values)-1))
         if mode=='multi':self.selected=set(default);self.original_selection=[v for v in values if v in self.selected]
         if mode=='text':self.text.text='' if default is None else str(default);self.text.buffer.cursor_position=len(self.text.text)
         self.app.layout.focus(self.text if mode=='text' else self.menu);self.app.invalidate()
@@ -133,6 +138,9 @@ class ConsoleUI:
         if not self.command_handler or self.command_active or self.mode=='busy' or self.pending is None:
             self.status='Commands are unavailable while an operation or command is running.';self.app.invalidate();return
         if action=='Save' and ((self.mode in ('text','multi') and (self.field_active or self.draft_active)) or (self.mode=='menu' and self.field_active)):
+            if self.mode=='menu' and not self.visible:
+                self.status='No matching option to save. Clear the filter or cancel.'
+                self.write_message(self.status+'\n');self.app.invalidate();return
             self.queued_command=(action,self.title)
             self.accept()  # The workflow parses/assigns the field before the next prompt.
         else:
@@ -140,6 +148,7 @@ class ConsoleUI:
 
     def request(self, mode, prompt, values=(), default=None):
         if self.closed:raise EOFError()
+        if not self.field_active and not self.command_active:self.field_error='';self.field_context=''
         if not self.command_active and self.checkpoint:self.checkpoint()
         if self.save_after_draft and not self.draft_active and not self.command_active:
             self.save_after_draft=False;self.execute_command('Save',mode)
@@ -170,11 +179,18 @@ class ConsoleUI:
     def execute_command(self, action, mode, *, draft=False):
         self.command_active=True
         try:self.command_handler(action,mode,draft)
-        finally:self.command_active=False
+        finally:
+            self.command_active=False
+            if self.checkpoint:self.checkpoint()
 
+    def choose_value(self,prompt,values,current):return self.request('menu',prompt,values,current)
     def choose(self, prompt, values):
         if not values:self.write_message('No options available.\n');return None
-        return self.request('menu',prompt,values)
+        answer=self.request('menu',prompt,values)
+        if answer is None and self.draft_active and not self.command_active:
+            from configbackup_lib.ui.editor_forms import EditCancelled
+            raise EditCancelled()
+        return answer
     def select_many(self,prompt,values,selected):return self.request('multi',prompt,values,selected)
     def ask(self,prompt,default=None):return self.request('text',prompt,default=default)
     def __call__(self,prompt=''):return self.ask(prompt)

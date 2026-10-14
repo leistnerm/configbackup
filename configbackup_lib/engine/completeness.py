@@ -133,9 +133,9 @@ class Coverage:
                         raise ValueError('Unsafe collection path: ' + name)
                     target = destination / name
                     target.parent.mkdir(parents=True, exist_ok=True)
-                    copied.append(target)
                     # Copy once, then hash the private bytes actually used by consumers.
                     with source.open('rb') as inp, target.open('xb') as out:
+                        copied.append(target)
                         shutil.copyfileobj(inp, out)
                     if digest(target) != expected:
                         raise ValueError('Collection changed while sealing: ' + name)

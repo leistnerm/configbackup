@@ -1,4 +1,4 @@
-CONFIGBACKUP WINDOWS TEST KIT 1.5.0
+CONFIGBACKUP WINDOWS TEST KIT 1.6.0
 
 Extract the complete kit to a local directory and run Run-SafeTests.cmd.
 The launcher checks prerequisites, offers missing dependencies for review,
@@ -9,5 +9,5 @@ launcher options. Offline fixtures use synthetic data. Optional GPO and
 component reads do not change policies or provision roles. Database fault
 and reconstruction tests require a separate disposable database environment.
 
-The kit includes ConfigBackup 1.5.0 and GPO harness 1.0.0 with SHA256 sidecars.
+The kit includes ConfigBackup 1.6.0 and GPO harness 1.0.0 with SHA256 sidecars.
 Unavailable prerequisites or native Windows checks remain NOT RUN.

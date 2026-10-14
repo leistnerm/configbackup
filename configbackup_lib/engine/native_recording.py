@@ -264,16 +264,25 @@ def export_perfmon(value):
 
 def wizard(config,config_path,input_fn=input):
     from configbackup_lib.ui.configure import choice,ask,boolean
+    from configbackup_lib.ui.navigation import field_editor,draft
+    from configbackup_lib.ui.editor_forms import integer,edit_boolean,text as ask,timezone
     while True:
         action=choice('Performance recording',['Configure recording','Show prerequisites / status','Enable recorder','Disable recorder','Configure reports','Generate performance report','Back'],input_fn)
         if action in (None,'Back'):return
-        perf=config.setdefault('performance',{})
+        perf=config.get('performance',{})
+        if perf:config['performance']=perf
         if action=='Configure recording':
-            value=settings(config,config_path);print(prerequisites(value)['guidance'])
-            value['directory']=ask('Private runtime history directory',value['directory'],input_fn)
-            for key,label in [('interval_seconds','Sample interval seconds (5..3600)'),('keep_days','History/export days (1..365)'),('max_mb','History size budget MiB (1..4096)')]:value[key]=int(ask(label,value[key],input_fn))
-            if value['backend']=='perfmon':value['timezone']=ask('PerfMon timestamp IANA time zone',value.get('timezone','UTC'),input_fn)
-            candidate={**config,'performance':{**perf,'recording':value}};settings(candidate,config_path);perf['recording']=value;print('Settings are unsaved. Enabling applies the reviewed settings immediately and records ownership.');continue
+            with draft(input_fn):
+                value=settings(config,config_path);print(prerequisites(value)['guidance'])
+                value['directory']=ask('Private runtime history directory',value['directory'],input_fn)
+                for key,label,upper in [('interval_seconds','Sample interval seconds (5..3600)',3600),('keep_days','History/export days (1..365)',365),('max_mb','History size budget MiB (1..4096)',4096)]:
+                    value[key]=integer(label,value[key],input_fn,5 if key=='interval_seconds' else 1,upper)
+                if value['backend']=='perfmon':
+                    from configbackup_lib.ui.editor_forms import scalar
+                    value['timezone']=scalar('timezone',value.get('timezone','UTC'),input_fn)
+                candidate={**config,'performance':{**perf,'recording':value}};settings(candidate,config_path)
+            perf['recording']=value;config['performance']=perf
+            print('Settings are unsaved. Enabling uses current edits and requires a separate reviewed plan confirmation.');continue
         if action=='Show prerequisites / status':
             from configbackup_lib.engine.recorder_health import inspect
             print(json.dumps(inspect(config,config_path),indent=2))
@@ -281,12 +290,13 @@ def wizard(config,config_path,input_fn=input):
             verb='enable' if action=='Enable recorder' else 'disable';value=plan(config,config_path,verb);print(json.dumps(value,indent=2))
             if boolean('Apply these native recorder changes now',False,input_fn):print(json.dumps(apply(config,config_path,verb,value['plan_id']),indent=2))
         elif action=='Configure reports':
-            perf['enabled']=boolean('Generate reports during ConfigBackup runs',perf.get('enabled',False),input_fn)
+            config['performance']=perf
+            perf['enabled']=edit_boolean('Generate reports during ConfigBackup runs',perf.get('enabled',False),input_fn)
             perf['output']=ask('Private performance report directory',perf.get('output',str(Path(config_path).resolve().parent/'performance-report')),input_fn)
             value=settings(config,config_path);source={'id':'local-performance','type':'perfmon_csv' if value['backend']=='perfmon' else 'native_history', 'path':str(Path(value['directory'])/('perfmon-export.csv' if value['backend']=='perfmon' else 'history-index.json')),'enabled':True,'host':ask('Host ID matching observed job history',platform.node(),input_fn)}
             if value['backend']=='perfmon':
-                source['timezone']=ask('PerfMon timestamp IANA time zone',value.get('timezone','UTC'),input_fn)
-                perf['export_native']=boolean('Export this dedicated PerfMon recorder before reports',False,input_fn)
+                source['timezone']=timezone('PerfMon timestamp IANA time zone',value.get('timezone','UTC'),input_fn)
+                perf['export_native']=edit_boolean('Export this dedicated PerfMon recorder before reports',False,input_fn)
             else:source['format']='sysstat_json' if value['backend']=='sysstat' else 'normalized_json'
             perf['sources']=[s for s in perf.get('sources',[]) if s.get('id')!=source['id']]+[source]
             if boolean('Include this performance report in configured monitoring email digests',False,input_fn):

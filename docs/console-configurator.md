@@ -24,7 +24,9 @@ The backup configurator has seven areas, plus a Commands menu:
 | Advanced configuration | Nested configuration browser and redacted configuration display |
 
 Monitor, schedule and registry editors show only the relevant areas. Submenus keep
-your selected area open after an action. The numbered fallback uses the same groups;
+your selected area open after an action. Tasks and shared connections list existing
+items first; select one to edit, test, duplicate, rename or remove it. Enable/disable
+is on runnable tasks, not shared connection profiles. The numbered fallback uses the same groups;
 its Commands menu is reached through the main menu.
 
 ## Keyboard controls
@@ -32,6 +34,8 @@ its Commands menu is reached through the main menu.
 | Key | Action |
 |---|---|
 | Ctrl+S / F2 | Save from any idle configuration menu or field; stay in the editor |
+| F1 | Context help and field/default explanation, without leaving the prompt |
+| F8 | Search commands across groups and loaded configuration paths |
 | F3 | Validate accepted configuration without altering unfinished input |
 | F4 | Show changes since the last successful save |
 | F5 / F6 | Undo / redo accepted configuration edits; return to the main menu |
@@ -44,6 +48,29 @@ its Commands menu is reached through the main menu.
 | Tab | Switch between navigation/input and scrollable results |
 | Ctrl+C twice | Abandon unsaved editing and exit |
 
+Overview includes enabled/disabled task counts, changed-value count, the last save
+in this session, validation status and the dependency check collected at startup.
+Use Python dependencies to refresh a dependency check after external changes.
+Returning from that screen refreshes Overview, including after a shortcut exit.
+Installed packages may still require restarting the process to load new versions.
+
+F8 searches action aliases such as SSIS, journal and timezone, plus keys in the
+loaded configuration. It never indexes secret values. Selecting a setting opens
+its containing mapping/list; leaving unfinished input requires confirmation.
+
+Field selectors start on the configured value, including false booleans. The
+browser displays the configuration path, sanitized current value, explicit task
+inheritance where known and a help description. For task fields, this includes
+nested defaults, reusable profiles and shared database connection settings. It
+shows the effective value and the source that would apply after removing the override. **Reset to inherited/default**
+removes an override after confirmation; required structural fields are protected.
+Defaults that cannot be determined from explicit configuration are labelled as
+application defaults rather than guessed. Validate before saving a reset.
+
+Numeric, JSON, custom-timezone and profile-YAML errors keep the input open with an
+inline error. Recorder configuration is staged until the form is complete; saving
+mid-form offers to finish first or save only completed configuration.
+
 The command bar stays visible in submenus. Commands are disabled while an operation
 or another command is running. On macOS, function keys may require Fn; Ctrl+S is an
 alternative for saving. Commands are not clickable buttons.
@@ -52,7 +79,7 @@ Saving an active configuration value accepts and parses it first. Invalid input 
 not written. Save at an operational prompt preserves the unfinished prompt; it does
 not approve the operation. An unfinished new item offers **Finish creating this
 item** (save after completion) or **Save completed changes only** (keep editing the
-draft). Cancelling the item cancels its deferred save.
+draft). Cancelling the item, including leaving it through undo/redo or search, cancels its deferred save.
 
 Save validates, preserves a timestamped backup and writes atomically. It refuses to
 overwrite a file changed on disk since loading or the last save. Failed validation
@@ -95,3 +122,30 @@ A missing timezone database now produces an explicit `tzdata` installation messa
 The **PowerShell execution policy** menu controls Windows child-process policy and newly generated launchers. See [setup](setup-walkthrough.md#powershell-execution-policy-on-windows). Save changes and regenerate existing launchers.
 
 See [configuration workflows](configuration-workflows.md) for launcher management, recovery, references and repair.
+
+## Checks and saved configuration
+
+Task, shared-connection and setup checks identify that they use current accepted
+edits. **Save and test** validates and saves first; if saving fails the check does
+not run. **Test current edits** does not write configuration. Recovery workflows
+label their saved-file/bundle input, and launcher workflows explain their on-disk
+inputs. These labels do not authorize installations, publication or recorder
+activation; those operations retain their explicit confirmations.
+
+Validation failures offer **Validation issues** with links to identifiable setting
+paths. Errors without a reliable field path link to the configuration browser;
+the editor does not guess an unrelated field. Leaving unfinished input to follow
+a link requires confirmation.
+
+Boolean and enum selections receive the same unfinished-input protection as
+text and checklists. Escape at a command confirmation returns to that input;
+Escape in a field cancels the input and retains previously accepted edits.
+Guided report and PerfMon timezone fields use the shared inline validator.
+
+Duplicating tasks creates new state identities, including archive consumers.
+Connection names such as `Back` remain ordinary editable items because their
+menu labels are distinct from commands.
+
+Save with an empty selector search does not queue a later write. Cancelling the
+selector preserves earlier edits in memory without saving them. Malformed mapping
+and list fields use a typed JSON editor, including when opened from validation.

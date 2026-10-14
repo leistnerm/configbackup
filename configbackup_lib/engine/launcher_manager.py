@@ -41,9 +41,10 @@ def regenerate(config_path, config, metadata):
         if key not in metadata:raise ValueError('Legacy launcher lacks regeneration metadata; generate a new launcher')
     lock=target/'.launcher-update.lock'
     fd=os.open(lock,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600);os.close(fd)
-    backup=target/('backup-'+uuid.uuid4().hex);backup.mkdir(mode=0o700)
+    backup=target/('backup-'+uuid.uuid4().hex)
     installed=[];old={}
     try:
+        backup.mkdir(mode=0o700)
         with tempfile.TemporaryDirectory(prefix='.launcher-stage-',dir=target.parent) as temp:
             args={k:metadata[k] for k in ('vault','account','mode','task','report_directory','history','shell') if k in metadata}
             policy=(config.get('options') or {}).get('powershell_execution_policy','inherit')
